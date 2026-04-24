@@ -1,3 +1,7 @@
 .codex
 annotations.md
-scripts/preflight-topic1.sh
+persona.md
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+concepts-notes.md
