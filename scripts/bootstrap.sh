@@ -12,7 +12,9 @@
 #   6. Provisions 3 VMs with Terraform (k3s-server-1, k3s-agent-1, k3s-agent-2)
 #   7. Bootstraps k3s server via Ansible (installs k3s, writes ~/.kube/config)
 #   8. Joins k3s agents via Ansible
-#   9. Prints final cluster status
+#   9. Validates k3s cluster node readiness
+#  10. Installs Istio 1.29.2 on the cluster (istioctl + default profile)
+#  11. Applies Istio manifests (namespaces, Gateway, PeerAuthentication, VirtualService, DestinationRule)
 #
 # Idempotency: safe to run multiple times. Each section checks current state
 # before making changes. Running on an already-provisioned machine is a no-op.
@@ -175,7 +177,7 @@ _ok "VMs provisioned"
 #   - Installs k3s server with: --disable traefik --tls-san <vm-ip>
 #   - Waits for k3s service active, API responsive, node Ready
 #   - Writes ~/.kube/config with the correct server IP
-_step "6/8 — Bootstrapping k3s server"
+_step "6/10 — Bootstrapping k3s server"
 
 ansible-playbook "$ANSIBLE_DIR/playbooks/01-install-k3s-server.yaml"
 
@@ -185,15 +187,82 @@ ansible-playbook "$ANSIBLE_DIR/playbooks/01-install-k3s-server.yaml"
 #   - Joins both agents to the server using the node token
 #   - Token is passed via stdin (never appears in process argv)
 #   - Waits for all nodes Ready
-_step "7/8 — Joining k3s agents"
+_step "7/10 — Joining k3s agents"
 
 ansible-playbook "$ANSIBLE_DIR/playbooks/02-join-k3s-agents.yaml"
 
-# ── Step 8: Validate ─────────────────────────────────────────────────────────
-_step "8/8 — Cluster validation"
+# ── Step 8: Validate k3s cluster ─────────────────────────────────────────────
+_step "8/10 — Cluster validation"
 
 kubectl get nodes -o wide
 
+_ok "k3s cluster nodes are Ready"
+
+# ── Step 9: Install Istio ─────────────────────────────────────────────────────
+# istioctl is the Istio CLI. We pin to 1.29.2 to match the version installed on
+# the cluster. The idempotency check compares the installed binary version
+# against the pinned version before downloading.
+#
+# istioctl install applies the Istio control plane (istiod) and the
+# istio-ingressgateway to the cluster. The 'default' profile includes both.
+# We wait for both deployments to be fully rolled out before continuing.
+_step "9/10 — Installing Istio 1.29.2"
+
+ISTIO_VERSION="1.29.2"
+ISTIOCTL_PATH="/usr/local/bin/istioctl"
+
+if command -v istioctl &>/dev/null && istioctl version --remote=false 2>/dev/null | grep -q "${ISTIO_VERSION}"; then
+  _ok "istioctl ${ISTIO_VERSION} already installed — skipping download"
+else
+  _info "Downloading istioctl ${ISTIO_VERSION} ..."
+  curl -sL \
+    "https://github.com/istio/istio/releases/download/${ISTIO_VERSION}/istioctl-${ISTIO_VERSION}-linux-amd64.tar.gz" \
+    | sudo tar -xz -C /usr/local/bin istioctl
+  sudo chmod +x "${ISTIOCTL_PATH}"
+  _ok "istioctl ${ISTIO_VERSION} installed at ${ISTIOCTL_PATH}"
+fi
+
+if kubectl get deployment istiod -n istio-system &>/dev/null 2>&1; then
+  _ok "Istio already installed on cluster — skipping istioctl install"
+else
+  _info "Installing Istio on cluster (profile=default) ..."
+  istioctl install --set profile=default -y
+  _info "Waiting for istiod rollout ..."
+  kubectl -n istio-system rollout status deployment/istiod --timeout=120s
+  _info "Waiting for istio-ingressgateway rollout ..."
+  kubectl -n istio-system rollout status deployment/istio-ingressgateway --timeout=120s
+  _ok "Istio control plane ready"
+fi
+
+# ── Step 10: Apply Istio manifests ────────────────────────────────────────────
+# Order matters:
+#   1. namespaces.yaml  — creates service-1/2/3 namespaces with istio-injection=enabled
+#                         (must exist before policies that reference them)
+#   2. gateway.yaml     — configures the ingressgateway listener (in istio-system,
+#                         independent of app namespaces)
+#   3. service-*/       — PeerAuthentication, VirtualService, DestinationRule
+#                         (namespace must already exist from step 1)
+#
+# kubectl apply is idempotent: re-running produces no changes if already applied.
+_step "10/10 — Applying Istio manifests"
+
+K8S_DIR="${REPO_ROOT}/infra/k8s"
+
+_info "Applying namespaces ..."
+kubectl apply -f "${K8S_DIR}/namespaces.yaml"
+
+_info "Applying Gateway ..."
+kubectl apply -f "${K8S_DIR}/gateway.yaml"
+
+_info "Applying per-service policies (PeerAuthentication, VirtualService, DestinationRule) ..."
+for svc in service-1 service-2 service-3; do
+  kubectl apply -R -f "${K8S_DIR}/${svc}/"
+done
+
+_ok "All Istio manifests applied"
+
 echo
-_ok "Bootstrap complete. The k3s cluster is ready."
-_ok "Run 'kubectl get nodes' at any time to check cluster state."
+_ok "Bootstrap complete. k3s cluster + Istio service mesh are ready."
+_ok "Verify nodes       : kubectl get nodes -o wide"
+_ok "Verify Istio       : istioctl version"
+_ok "Verify policies    : kubectl get peerauthentication,gateway,virtualservice,destinationrule --all-namespaces"
