@@ -104,7 +104,7 @@
 
     - name: Build INSTALL_K3S_EXEC string
       ansible.builtin.set_fact:
-        k3s_install_exec: "server --node-name {{ k3s_server_name }} --write-kubeconfig-mode 600 --tls-san {{ k3s_server_ipv4 }}"
+        k3s_install_exec: "server --node-name {{ k3s_server_name }} --write-kubeconfig-mode 600 --tls-san {{ k3s_server_ipv4 }} --disable traefik"
 
     - name: Preflight outbound HTTPS reachability from server VM
       ansible.builtin.command: "incus exec {{ k3s_server_name }} -- sh -lc 'curl -fsSLI --connect-timeout 5 --max-time 20 https://get.k3s.io >/dev/null'"
