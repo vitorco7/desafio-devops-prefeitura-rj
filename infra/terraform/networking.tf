@@ -11,12 +11,31 @@ resource "incus_network" "k3s_bridge" {
   }
 }
 
-resource "incus_profile" "k3s_network" {
-  name        = "k3s-network"
-  description = "Project-specific NIC profile for k3s nodes."
+# Single self-contained profile that fully defines a k3s node:
+#   - root disk  → "default" dir storage pool (pre-existing host resource,
+#                   created by `incus admin init --minimal` in bootstrap.sh;
+#                   not Terraform-managed — cannot be created or destroyed here)
+#   - eth0 NIC   → k3sbr0 bridge
+#
+# Instances reference only this profile, so the entire VM configuration is
+# visible in version control with no implicit dependency on the Incus-managed
+# "default" profile.
+resource "incus_profile" "k3s_vm" {
+  name        = "k3s-vm"
+  description = "Complete VM profile: root disk on default pool + NIC on k3sbr0."
 
-  # Use eth0 so this profile overrides any conflicting default-profile NIC
-  # and guarantees predictable VM-to-bridge attachment.
+  depends_on = [incus_network.k3s_bridge]
+
+  device {
+    name = "root"
+    type = "disk"
+
+    properties = {
+      path = "/"
+      pool = "default"
+    }
+  }
+
   device {
     name = "eth0"
     type = "nic"
@@ -26,3 +45,5 @@ resource "incus_profile" "k3s_network" {
     }
   }
 }
+
+

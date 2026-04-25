@@ -23,7 +23,7 @@
 
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")" && pwd)"
+REPO_ROOT="$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")/.." && pwd)"
 TERRAFORM_DIR="$REPO_ROOT/infra/terraform"
 ANSIBLE_DIR="$REPO_ROOT/infra/ansible"
 

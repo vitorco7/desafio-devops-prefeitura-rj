@@ -5,7 +5,7 @@ resource "incus_instance" "nodes" {
   type     = local.node_defaults.type
   image    = local.node_defaults.image
   running  = true
-  profiles = ["default", incus_profile.k3s_network.name]
+  profiles = [incus_profile.k3s_vm.name]
 
   config = {
     "boot.autostart" = "true"
