@@ -1,0 +1,10 @@
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: service-3
+  namespace: service-3
+spec:
+  host: service-3
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL

@@ -1,0 +1,16 @@
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: service-3
+  namespace: service-3
+spec:
+  hosts:
+  - "service-3.local"
+  gateways:
+  - istio-system/mesh-gateway
+  http:
+  - route:
+    - destination:
+        host: service-3
+        port:
+          number: 80
