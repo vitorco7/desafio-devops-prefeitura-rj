@@ -29,10 +29,9 @@
       register: k3s_agents_output
       changed_when: false
 
-    - name: Parse server and agents metadata
+    - name: Parse server name and agents from Terraform output
       ansible.builtin.set_fact:
         k3s_server_name: "{{ (k3s_server_output.stdout | from_json).name }}"
-        k3s_server_ipv4: "{{ (k3s_server_output.stdout | from_json).ipv4 | default('', true) }}"
         k3s_agents: "{{ (k3s_agents_output.stdout | from_json) }}"
 
     - name: Assert required topology metadata is present
@@ -40,10 +39,35 @@
         that:
           - k3s_server_name is string
           - k3s_server_name | length > 0
-          - k3s_server_ipv4 is string
-          - k3s_server_ipv4 | length > 0
           - k3s_agents | length >= 1
-        fail_msg: "Invalid Terraform outputs for k3s join: missing server/agent connection metadata."
+        fail_msg: "Invalid Terraform outputs for k3s join: missing server/agent names."
+
+    - name: Validate presence of node join token file on server
+      ansible.builtin.command: "incus exec {{ k3s_server_name }} -- test -s /var/lib/rancher/k3s/server/node-token"
+      register: token_presence
+      changed_when: false
+      no_log: true
+
+    - name: Read node join token from server
+      ansible.builtin.command: "incus exec {{ k3s_server_name }} -- cat /var/lib/rancher/k3s/server/node-token"
+      register: k3s_node_token
+      changed_when: false
+      no_log: true
+
+    - name: Get server IPv4 from DHCP lease
+      ansible.builtin.command: "incus network list-leases k3sbr0 --format csv"
+      register: server_leases
+      changed_when: false
+
+    - name: Set server IPv4 fact
+      ansible.builtin.set_fact:
+        k3s_server_ipv4: "{{ (server_leases.stdout_lines | select('search', k3s_server_name) | list | first).split(',')[2] }}"
+
+    - name: Assert server IPv4 was resolved
+      ansible.builtin.assert:
+        that:
+          - k3s_server_ipv4 | length > 0
+        fail_msg: "Could not determine IPv4 address for {{ k3s_server_name }} from DHCP leases."
 
     - name: Validate presence of node join token file on server
       ansible.builtin.command: "incus exec {{ k3s_server_name }} -- test -s /var/lib/rancher/k3s/server/node-token"
@@ -64,6 +88,17 @@
       retries: 60
       delay: 2
       until: agent_ready.rc == 0
+      loop: "{{ k3s_agents | dict2items }}"
+      loop_control:
+        label: "{{ item.value.name }}"
+
+    - name: Wait for each agent VM to receive a DHCP address
+      ansible.builtin.command: "incus network list-leases k3sbr0 --format csv"
+      register: agent_leases
+      changed_when: false
+      retries: 60
+      delay: 5
+      until: agent_leases.stdout_lines | select('search', item.value.name) | list | length > 0
       loop: "{{ k3s_agents | dict2items }}"
       loop_control:
         label: "{{ item.value.name }}"
@@ -93,16 +128,22 @@
       loop_control:
         label: "{{ item.item.value.name }}"
 
-    - name: Install k3s agent where missing (token via stdin, not argv)
-      ansible.builtin.shell: |
-        set -euo pipefail
-        incus exec {{ item.item.value.name }} -- env INSTALL_K3S_CHANNEL={{ k3s_install_channel }} K3S_URL=https://{{ k3s_server_ipv4 }}:6443 sh -lc '
-          IFS= read -r K3S_TOKEN
-          curl -fsSL https://get.k3s.io | K3S_URL="${K3S_URL}" K3S_TOKEN="${K3S_TOKEN}" INSTALL_K3S_CHANNEL="${INSTALL_K3S_CHANNEL}" sh -
-        '
-      args:
-        executable: /bin/bash
-        stdin: "{{ k3s_node_token.stdout | trim }}"
+    - name: Install k3s agent where missing
+      ansible.builtin.command:
+        argv:
+          - incus
+          - exec
+          - "{{ item.item.value.name }}"
+          - --env
+          - "K3S_TOKEN={{ k3s_node_token.stdout | trim }}"
+          - --env
+          - "K3S_URL=https://{{ k3s_server_ipv4 }}:6443"
+          - --env
+          - "INSTALL_K3S_CHANNEL={{ k3s_install_channel }}"
+          - --
+          - sh
+          - -lc
+          - "curl -fsSL https://get.k3s.io | sh -"
       when: item.rc != 0
       no_log: true
       loop: "{{ k3s_agent_installed.results }}"

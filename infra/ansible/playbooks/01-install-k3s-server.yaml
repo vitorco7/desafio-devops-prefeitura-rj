@@ -24,19 +24,16 @@
       register: k3s_server_output
       changed_when: false
 
-    - name: Parse server metadata
+    - name: Parse server name from Terraform output
       ansible.builtin.set_fact:
         k3s_server_name: "{{ (k3s_server_output.stdout | from_json).name }}"
-        k3s_server_ipv4: "{{ (k3s_server_output.stdout | from_json).ipv4 | default('', true) }}"
 
-    - name: Assert required server metadata is present
+    - name: Assert server name is present
       ansible.builtin.assert:
         that:
           - k3s_server_name is string
           - k3s_server_name | length > 0
-          - k3s_server_ipv4 is string
-          - k3s_server_ipv4 | length > 0
-        fail_msg: "Invalid Terraform output for k3s_server: missing node name or IPv4."
+        fail_msg: "Invalid Terraform output for k3s_server: missing node name."
 
     - name: Wait for Incus instance command readiness
       ansible.builtin.command: "incus exec {{ k3s_server_name }} -- true"
@@ -45,6 +42,24 @@
       retries: 60
       delay: 2
       until: incus_ready.rc == 0
+
+    - name: Wait for server VM to receive a DHCP address
+      ansible.builtin.command: "incus network list-leases k3sbr0 --format csv"
+      register: vm_ipv4_raw
+      changed_when: false
+      retries: 60
+      delay: 5
+      until: vm_ipv4_raw.stdout_lines | select('search', k3s_server_name) | list | length > 0
+
+    - name: Set server IPv4 from DHCP lease
+      ansible.builtin.set_fact:
+        k3s_server_ipv4: "{{ (vm_ipv4_raw.stdout_lines | select('search', k3s_server_name) | list | first).split(',')[2] }}"
+
+    - name: Assert server IPv4 was resolved
+      ansible.builtin.assert:
+        that:
+          - k3s_server_ipv4 | length > 0
+        fail_msg: "Could not determine IPv4 address for {{ k3s_server_name }} from DHCP leases."
 
     - name: Detect non-loopback interfaces inside server VM
       ansible.builtin.command: "incus exec {{ k3s_server_name }} -- sh -lc 'ls /sys/class/net | grep -Ev \"^lo$\" | wc -l'"

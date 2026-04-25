@@ -3,10 +3,11 @@ resource "incus_network" "k3s_bridge" {
   type = "bridge"
 
   config = {
-    "ipv4.address" = "10.220.31.1/24"
-    "ipv4.dhcp"    = "true"
-    "ipv4.nat"     = "true"
-    "ipv6.address" = "none"
+    "ipv4.address"  = "10.220.31.1/24"
+    "ipv4.dhcp"     = "true"
+    "ipv4.nat"      = "true"
+    "ipv4.firewall" = "false"
+    "ipv6.address"  = "none"
   }
 }
 

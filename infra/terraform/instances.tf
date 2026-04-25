@@ -14,9 +14,4 @@ resource "incus_instance" "nodes" {
     "user.role"      = each.value.role
   }
 
-  # Make networking failures explicit during provisioning.
-  wait_for {
-    type = "ipv4"
-    nic  = "eth0"
-  }
 }
