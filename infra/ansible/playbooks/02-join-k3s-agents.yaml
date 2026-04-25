@@ -1,0 +1,133 @@
+---
+- name: Step 6 - Join k3s agent nodes
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    terraform_dir: "{{ playbook_dir }}/../../terraform"
+    k3s_install_channel: "stable"
+
+  tasks:
+    - name: Check required local commands
+      ansible.builtin.shell: "command -v {{ item }}"
+      args:
+        executable: /bin/bash
+      changed_when: false
+      loop:
+        - terraform
+        - incus
+        - curl
+
+    - name: Read k3s server output from Terraform
+      ansible.builtin.command: "terraform -chdir={{ terraform_dir }} output -json k3s_server"
+      register: k3s_server_output
+      changed_when: false
+
+    - name: Read k3s agents output from Terraform
+      ansible.builtin.command: "terraform -chdir={{ terraform_dir }} output -json k3s_agents"
+      register: k3s_agents_output
+      changed_when: false
+
+    - name: Parse server and agents metadata
+      ansible.builtin.set_fact:
+        k3s_server_name: "{{ (k3s_server_output.stdout | from_json).name }}"
+        k3s_server_ipv4: "{{ (k3s_server_output.stdout | from_json).ipv4 | default('', true) }}"
+        k3s_agents: "{{ (k3s_agents_output.stdout | from_json) }}"
+
+    - name: Assert required topology metadata is present
+      ansible.builtin.assert:
+        that:
+          - k3s_server_name is string
+          - k3s_server_name | length > 0
+          - k3s_server_ipv4 is string
+          - k3s_server_ipv4 | length > 0
+          - k3s_agents | length >= 1
+        fail_msg: "Invalid Terraform outputs for k3s join: missing server/agent connection metadata."
+
+    - name: Validate presence of node join token file on server
+      ansible.builtin.command: "incus exec {{ k3s_server_name }} -- test -s /var/lib/rancher/k3s/server/node-token"
+      register: token_presence
+      changed_when: false
+      no_log: true
+
+    - name: Read node join token from server
+      ansible.builtin.command: "incus exec {{ k3s_server_name }} -- cat /var/lib/rancher/k3s/server/node-token"
+      register: k3s_node_token
+      changed_when: false
+      no_log: true
+
+    - name: Wait for each agent instance command readiness
+      ansible.builtin.command: "incus exec {{ item.value.name }} -- true"
+      register: agent_ready
+      changed_when: false
+      retries: 60
+      delay: 2
+      until: agent_ready.rc == 0
+      loop: "{{ k3s_agents | dict2items }}"
+      loop_control:
+        label: "{{ item.value.name }}"
+
+    - name: Check whether k3s is already installed on each agent
+      ansible.builtin.command: "incus exec {{ item.value.name }} -- sh -lc 'command -v k3s'"
+      register: k3s_agent_installed
+      changed_when: false
+      failed_when: false
+      loop: "{{ k3s_agents | dict2items }}"
+      loop_control:
+        label: "{{ item.value.name }}"
+
+    - name: Ensure curl and ca-certificates are installed on each agent VM
+      ansible.builtin.command:
+        argv:
+          - incus
+          - exec
+          - "{{ item.item.value.name }}"
+          - --
+          - sh
+          - -lc
+          - "apt-get install -y --no-install-recommends curl ca-certificates"
+      changed_when: true
+      when: item.rc != 0
+      loop: "{{ k3s_agent_installed.results }}"
+      loop_control:
+        label: "{{ item.item.value.name }}"
+
+    - name: Install k3s agent where missing (token via stdin, not argv)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        incus exec {{ item.item.value.name }} -- env INSTALL_K3S_CHANNEL={{ k3s_install_channel }} K3S_URL=https://{{ k3s_server_ipv4 }}:6443 sh -lc '
+          IFS= read -r K3S_TOKEN
+          curl -fsSL https://get.k3s.io | K3S_URL="${K3S_URL}" K3S_TOKEN="${K3S_TOKEN}" INSTALL_K3S_CHANNEL="${INSTALL_K3S_CHANNEL}" sh -
+        '
+      args:
+        executable: /bin/bash
+        stdin: "{{ k3s_node_token.stdout | trim }}"
+      when: item.rc != 0
+      no_log: true
+      loop: "{{ k3s_agent_installed.results }}"
+      loop_control:
+        label: "{{ item.item.value.name }}"
+
+    - name: Wait for k3s agent service to be active
+      ansible.builtin.command: "incus exec {{ item.value.name }} -- systemctl is-active --quiet k3s-agent"
+      register: k3s_agent_service
+      changed_when: false
+      retries: 90
+      delay: 2
+      until: k3s_agent_service.rc == 0
+      loop: "{{ k3s_agents | dict2items }}"
+      loop_control:
+        label: "{{ item.value.name }}"
+
+    - name: Wait for all cluster nodes to be Ready
+      ansible.builtin.command: "incus exec {{ k3s_server_name }} -- k3s kubectl wait --for=condition=Ready nodes --all --timeout=300s"
+      register: cluster_ready
+      changed_when: false
+
+    - name: Print secure agent join summary
+      ansible.builtin.debug:
+        msg:
+          - "k3s server endpoint: https://{{ k3s_server_ipv4 }}:6443"
+          - "k3s agents joined: {{ (k3s_agents | dict2items | map(attribute='value.name') | list) | join(', ') }}"
+          - "Join token usage completed without token disclosure."

@@ -2,6 +2,19 @@
 annotations.md
 persona.md
 **/.terraform/*
+!**/.terraform.lock.hcl
 *.tfstate
 *.tfstate.*
+*.tfplan
+tfplan
+crash.log
 concepts-notes.md
+
+# Sensitive local artifacts
+*.token
+*.secret
+*.secrets
+.env
+.env.*
+secrets/
+cheatsheet.md

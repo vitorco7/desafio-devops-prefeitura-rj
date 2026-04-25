@@ -1,0 +1,222 @@
+---
+- name: Step 5 - Bootstrap k3s server node
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    terraform_dir: "{{ playbook_dir }}/../../terraform"
+    k3s_install_channel: "stable"
+
+  tasks:
+    - name: Check required local commands
+      ansible.builtin.shell: "command -v {{ item }}"
+      args:
+        executable: /bin/bash
+      changed_when: false
+      loop:
+        - terraform
+        - incus
+        - curl
+
+    - name: Read k3s server output from Terraform
+      ansible.builtin.command: "terraform -chdir={{ terraform_dir }} output -json k3s_server"
+      register: k3s_server_output
+      changed_when: false
+
+    - name: Parse server metadata
+      ansible.builtin.set_fact:
+        k3s_server_name: "{{ (k3s_server_output.stdout | from_json).name }}"
+        k3s_server_ipv4: "{{ (k3s_server_output.stdout | from_json).ipv4 | default('', true) }}"
+
+    - name: Assert required server metadata is present
+      ansible.builtin.assert:
+        that:
+          - k3s_server_name is string
+          - k3s_server_name | length > 0
+          - k3s_server_ipv4 is string
+          - k3s_server_ipv4 | length > 0
+        fail_msg: "Invalid Terraform output for k3s_server: missing node name or IPv4."
+
+    - name: Wait for Incus instance command readiness
+      ansible.builtin.command: "incus exec {{ k3s_server_name }} -- true"
+      register: incus_ready
+      changed_when: false
+      retries: 60
+      delay: 2
+      until: incus_ready.rc == 0
+
+    - name: Detect non-loopback interfaces inside server VM
+      ansible.builtin.command: "incus exec {{ k3s_server_name }} -- sh -lc 'ls /sys/class/net | grep -Ev \"^lo$\" | wc -l'"
+      register: server_non_lo_ifaces
+      changed_when: false
+
+    - name: Collect server VM diagnostics when NIC is missing
+      ansible.builtin.command:
+        argv:
+          - incus
+          - exec
+          - "{{ k3s_server_name }}"
+          - --
+          - sh
+          - -lc
+          - |
+            echo "[/sys/class/net]"
+            ls -1 /sys/class/net || true
+            echo
+            echo "[ip -o link]"
+            ip -o link || true
+            echo
+            echo "[ip -4 addr]"
+            ip -4 addr || true
+      register: k3s_no_nic_diagnostics
+      changed_when: false
+      when: (server_non_lo_ifaces.stdout | trim | int) == 0
+
+    - name: Fail fast when VM has no NIC (Terraform/profile issue)
+      ansible.builtin.fail:
+        msg: |
+          {{ k3s_server_name }} has no non-loopback network interface.
+          This is an infrastructure provisioning problem and must be fixed in Terraform/Incus profile definitions.
+          Re-apply Terraform with project-managed networking resources before running this playbook.
+
+          Diagnostics:
+          {{ k3s_no_nic_diagnostics.stdout | default('no diagnostics captured') }}
+      when: (server_non_lo_ifaces.stdout | trim | int) == 0
+
+    - name: Ensure curl and ca-certificates are installed in server VM
+      ansible.builtin.command:
+        argv:
+          - incus
+          - exec
+          - "{{ k3s_server_name }}"
+          - --
+          - sh
+          - -lc
+          - "apt-get install -y --no-install-recommends curl ca-certificates"
+      changed_when: true
+
+    - name: Check whether k3s is already installed
+      ansible.builtin.command: "incus exec {{ k3s_server_name }} -- sh -lc 'command -v k3s'"
+      register: k3s_installed
+      changed_when: false
+      failed_when: false
+
+    - name: Build INSTALL_K3S_EXEC string
+      ansible.builtin.set_fact:
+        k3s_install_exec: "server --node-name {{ k3s_server_name }} --write-kubeconfig-mode 600 --tls-san {{ k3s_server_ipv4 }}"
+
+    - name: Preflight outbound HTTPS reachability from server VM
+      ansible.builtin.command: "incus exec {{ k3s_server_name }} -- sh -lc 'curl -fsSLI --connect-timeout 5 --max-time 20 https://get.k3s.io >/dev/null'"
+      register: k3s_egress_check
+      changed_when: false
+      failed_when: false
+      when: k3s_installed.rc != 0
+
+    - name: Collect server VM network diagnostics when egress is unavailable
+      ansible.builtin.command:
+        argv:
+          - incus
+          - exec
+          - "{{ k3s_server_name }}"
+          - --
+          - sh
+          - -lc
+          - |
+            echo "[ip -4 addr]"
+            ip -4 addr || true
+            echo
+            echo "[ip -o link]"
+            ip -o link || true
+            echo
+            echo "[/sys/class/net]"
+            ls -1 /sys/class/net || true
+            echo
+            echo "[ip -4 route]"
+            ip -4 route || true
+            echo
+            echo "[resolv.conf]"
+            cat /etc/resolv.conf || true
+      register: k3s_network_diagnostics
+      changed_when: false
+      when:
+        - k3s_installed.rc != 0
+        - k3s_egress_check.rc != 0
+
+    - name: Fail fast when server VM has no outbound connectivity
+      ansible.builtin.fail:
+        msg: |
+          k3s preflight failed: {{ k3s_server_name }} cannot reach https://get.k3s.io.
+          This points to VM networking problems (DHCP/default route/DNS) and should be fixed at Terraform/Incus layer.
+
+          Diagnostics:
+          {{ k3s_network_diagnostics.stdout | default('no diagnostics captured') }}
+      when:
+        - k3s_installed.rc != 0
+        - k3s_egress_check.rc != 0
+
+    - name: Install k3s server (first run only)
+      ansible.builtin.command:
+        argv:
+          - incus
+          - exec
+          - "{{ k3s_server_name }}"
+          - --
+          - env
+          - "INSTALL_K3S_CHANNEL={{ k3s_install_channel }}"
+          - "INSTALL_K3S_EXEC={{ k3s_install_exec }}"
+          - sh
+          - -lc
+          - "curl -fsSL https://get.k3s.io | sh -"
+      when:
+        - k3s_installed.rc != 0
+        - k3s_egress_check.rc == 0
+
+    - name: Wait for k3s service and report logs on failure
+      block:
+        - name: Wait for k3s service to be active
+          ansible.builtin.command: "incus exec {{ k3s_server_name }} -- systemctl is-active --quiet k3s"
+          register: k3s_service
+          changed_when: false
+          retries: 90
+          delay: 2
+          until: k3s_service.rc == 0
+      rescue:
+        - name: Collect last k3s journal logs
+          ansible.builtin.command: "incus exec {{ k3s_server_name }} -- sh -lc 'journalctl -u k3s --no-pager -n 120'"
+          register: k3s_journal
+          changed_when: false
+          failed_when: false
+
+        - name: Fail with k3s service diagnostics
+          ansible.builtin.fail:
+            msg: |
+              k3s service did not become active on {{ k3s_server_name }}.
+              Last journal lines:
+              {{ k3s_journal.stdout | default('no journal output captured') }}
+
+    - name: Wait for Kubernetes API responsiveness
+      ansible.builtin.command: "incus exec {{ k3s_server_name }} -- k3s kubectl get nodes"
+      register: k8s_api
+      changed_when: false
+      retries: 90
+      delay: 2
+      until: k8s_api.rc == 0
+
+    - name: Wait for node readiness
+      ansible.builtin.command: "incus exec {{ k3s_server_name }} -- k3s kubectl wait --for=condition=Ready nodes --all --timeout=180s"
+      register: ready_wait
+      changed_when: false
+
+    - name: Validate presence of node join token file
+      ansible.builtin.command: "incus exec {{ k3s_server_name }} -- test -s /var/lib/rancher/k3s/server/node-token"
+      register: node_token_presence
+      changed_when: false
+      no_log: true
+
+    - name: Print secure server summary
+      ansible.builtin.debug:
+        msg:
+          - "Server is ready: {{ k3s_server_name }}"
+          - "Server IPv4: {{ k3s_server_ipv4 | default('<empty>', true) }}"
+          - "Join token: generated and stored on server (not printed)."
