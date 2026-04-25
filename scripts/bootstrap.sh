@@ -234,35 +234,71 @@ else
   _ok "Istio control plane ready"
 fi
 
-# ── Step 10: Apply Istio manifests ────────────────────────────────────────────
-# Order matters:
-#   1. namespaces.yaml  — creates service-1/2/3 namespaces with istio-injection=enabled
-#                         (must exist before policies that reference them)
-#   2. gateway.yaml     — configures the ingressgateway listener (in istio-system,
-#                         independent of app namespaces)
-#   3. service-*/       — PeerAuthentication, VirtualService, DestinationRule
-#                         (namespace must already exist from step 1)
+# ── Step 10: Apply manifests and deploy services ──────────────────────────────
+# Directory layout after refactor:
+#   infra/k8s/
+#   ├── namespaces.yaml         — service-1/2/3 namespaces (istio-injection=enabled)
+#   ├── istio/                  — all Istio CRDs (Gateway, PeerAuthentication,
+#   │   ├── gateway.yaml          VirtualService, DestinationRule)
+#   │   ├── service-1/ ...
+#   │   ├── service-2/ ...
+#   │   └── service-3/ ...
+#   └── service-1/              — kubectl-managed app workload (SA, Deployment, Service)
+#       ├── serviceaccount.yaml
+#       ├── deployment.yaml
+#       └── service.yaml
 #
-# kubectl apply is idempotent: re-running produces no changes if already applied.
-_step "10/10 — Applying Istio manifests"
+#   infra/helm/
+#   ├── service-2/              — Helm chart (SA, Deployment, ClusterIP Service)
+#   └── service-3/              — Helm chart (SA, Deployment, ClusterIP Service)
+#
+# Apply order:
+#   1. namespaces first — Istio policies and app pods require namespaces to exist
+#   2. Istio CRDs       — PeerAuthentication/VS/DR applied before pods start so
+#                         sidecar injection picks up the correct policy at pod launch
+#   3. service-1 app    — ServiceAccount, Deployment, Service via kubectl
+#   4. service-2 app    — Helm install (idempotent: skipped if release exists)
+#   5. service-3 app    — Helm install (idempotent: skipped if release exists)
+#
+# kubectl apply and helm install are both idempotent.
+_step "10/10 — Applying manifests and deploying services"
 
 K8S_DIR="${REPO_ROOT}/infra/k8s"
+HELM_DIR="${REPO_ROOT}/infra/helm"
 
 _info "Applying namespaces ..."
 kubectl apply -f "${K8S_DIR}/namespaces.yaml"
 
-_info "Applying Gateway ..."
-kubectl apply -f "${K8S_DIR}/gateway.yaml"
+_info "Applying Istio CRDs (Gateway, PeerAuthentication, VirtualService, DestinationRule) ..."
+kubectl apply -R -f "${K8S_DIR}/istio/"
 
-_info "Applying per-service policies (PeerAuthentication, VirtualService, DestinationRule) ..."
-for svc in service-1 service-2 service-3; do
-  kubectl apply -R -f "${K8S_DIR}/${svc}/"
-done
+_info "Applying service-1 app manifests (ServiceAccount, Deployment, Service) ..."
+kubectl apply -R -f "${K8S_DIR}/service-1/"
 
-_ok "All Istio manifests applied"
+_info "Deploying service-2 via Helm ..."
+if helm status service-2 -n service-2 &>/dev/null; then
+  _info "service-2 Helm release already exists — skipping install"
+else
+  helm install service-2 "${HELM_DIR}/service-2/" -n service-2
+fi
+
+_info "Deploying service-3 via Helm ..."
+if helm status service-3 -n service-3 &>/dev/null; then
+  _info "service-3 Helm release already exists — skipping install"
+else
+  helm install service-3 "${HELM_DIR}/service-3/" -n service-3
+fi
+
+_info "Waiting for all app deployments to roll out ..."
+kubectl rollout status deployment/service-1 -n service-1 --timeout=120s
+kubectl rollout status deployment/service-2 -n service-2 --timeout=120s
+kubectl rollout status deployment/service-3 -n service-3 --timeout=120s
+
+_ok "All manifests applied and services deployed"
 
 echo
 _ok "Bootstrap complete. k3s cluster + Istio service mesh are ready."
 _ok "Verify nodes       : kubectl get nodes -o wide"
 _ok "Verify Istio       : istioctl version"
 _ok "Verify policies    : kubectl get peerauthentication,gateway,virtualservice,destinationrule --all-namespaces"
+_ok "Verify pods        : kubectl get pods -A | grep -E '^(service-1|service-2|service-3)'"

@@ -1,0 +1,6 @@
+apiVersion: v2
+name: service-3
+description: Externally-accessible isolated httpbin workload for service-3
+type: application
+version: 0.1.0
+appVersion: "latest"

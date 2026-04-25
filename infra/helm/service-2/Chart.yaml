@@ -1,0 +1,6 @@
+apiVersion: v2
+name: service-2
+description: Internal httpbin workload for service-2
+type: application
+version: 0.1.0
+appVersion: "latest"
