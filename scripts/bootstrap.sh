@@ -235,46 +235,83 @@ else
 fi
 
 # ── Step 10: Apply manifests and deploy services ──────────────────────────────
-# Directory layout after refactor:
+# Directory layout:
 #   infra/k8s/
-#   ├── namespaces.yaml         — service-1/2/3 namespaces (istio-injection=enabled)
-#   ├── istio/                  — all Istio CRDs (Gateway, PeerAuthentication,
-#   │   ├── gateway.yaml          VirtualService, DestinationRule)
+#   ├── namespaces.yaml
+#   ├── istio/                  — Gateway, PeerAuthentication, VirtualService,
+#   │   ├── gateway.yaml          DestinationRule, RequestAuthentication (.tpl)
 #   │   ├── service-1/ ...
 #   │   ├── service-2/ ...
 #   │   └── service-3/ ...
-#   └── service-1/              — kubectl-managed app workload (SA, Deployment, Service)
-#       ├── serviceaccount.yaml
-#       ├── deployment.yaml
-#       └── service.yaml
+#   └── service-1/              — SA, Deployment, Service (kubectl)
 #
-#   infra/helm/
-#   ├── service-2/              — Helm chart (SA, Deployment, ClusterIP Service)
-#   └── service-3/              — Helm chart (SA, Deployment, ClusterIP Service)
+#   infra/helm/service-2/  infra/helm/service-3/   — Helm charts
+#
+#   infra/jwt/
+#   ├── generate.py             — produces key pair, jwks.json, token.jwt
+#   ├── private.pem / public.pem / jwks.json / token.jwt  — gitignored, generated here
+#   └── *.yaml.tpl              — RequestAuthentication templates (JWKS_INLINE placeholder)
 #
 # Apply order:
-#   1. namespaces first — Istio policies and app pods require namespaces to exist
-#   2. Istio CRDs       — PeerAuthentication/VS/DR applied before pods start so
-#                         sidecar injection picks up the correct policy at pod launch
-#   3. service-1 app    — ServiceAccount, Deployment, Service via kubectl
-#   4. service-2 app    — Helm install (idempotent: skipped if release exists)
-#   5. service-3 app    — Helm install (idempotent: skipped if release exists)
-#
-# kubectl apply and helm install are both idempotent.
+#   10a. Generate JWT key pair, JWKS, and test token (idempotent)
+#   10b. Apply namespaces
+#   10c. Apply Istio CRDs via kubectl apply -R (skips .tpl files automatically)
+#   10d. Apply RequestAuthentication for service-1 and service-3 (inline JWKS substituted
+#        from jwks.json — no HTTP server needed; istiod reads the key from the object)
+#   10e. Deploy service-1 (kubectl)
+#   10f. Deploy service-2 (Helm)
+#   10g. Deploy service-3 (Helm)
 _step "10/10 — Applying manifests and deploying services"
 
 K8S_DIR="${REPO_ROOT}/infra/k8s"
 HELM_DIR="${REPO_ROOT}/infra/helm"
+JWT_DIR="${REPO_ROOT}/infra/jwt"
+ISTIO_DIR="${K8S_DIR}/istio"
 
+# ── 10a: Generate JWT artifacts ───────────────────────────────────────────────
+# private.pem, public.pem, jwks.json, and token.jwt are gitignored.
+# Skipped if all three key artifacts already exist (re-run safety).
+if [[ -f "${JWT_DIR}/private.pem" && -f "${JWT_DIR}/jwks.json" && -f "${JWT_DIR}/token.jwt" ]]; then
+  _ok "JWT artifacts already present — skipping key generation"
+else
+  _info "Generating RSA-2048 key pair, JWKS document, and test JWT ..."
+  python3 "${JWT_DIR}/generate.py"
+  _ok "JWT artifacts generated in ${JWT_DIR}/"
+fi
+
+# ── 10b: Apply namespaces ─────────────────────────────────────────────────────
 _info "Applying namespaces ..."
 kubectl apply -f "${K8S_DIR}/namespaces.yaml"
 
+# ── 10c: Apply Istio CRDs ─────────────────────────────────────────────────────
+# kubectl apply -R ignores .yaml.tpl files — RequestAuthentication templates
+# are handled separately in 10d.
 _info "Applying Istio CRDs (Gateway, PeerAuthentication, VirtualService, DestinationRule) ..."
-kubectl apply -R -f "${K8S_DIR}/istio/"
+kubectl apply -R -f "${ISTIO_DIR}/"
 
+# ── 10d: Apply RequestAuthentication (inline JWKS — no HTTP server needed) ───
+# The .yaml.tpl templates contain JWKS_INLINE as a placeholder. We substitute
+# the compact JSON from jwks.json and pipe directly to kubectl apply.
+# This means the RSA public key never needs to be served over HTTP — istiod
+# reads it directly from the Kubernetes RequestAuthentication object.
+_info "Applying RequestAuthentication (service-1 and service-3) with inline JWKS ..."
+_apply_request_auth() {
+  local tpl="$1"
+  python3 -c "
+import json, sys
+tpl = open(sys.argv[1]).read()
+jwks = json.dumps(json.load(open(sys.argv[2])))
+print(tpl.replace('JWKS_INLINE', jwks))
+" "${tpl}" "${JWT_DIR}/jwks.json" | kubectl apply -f -
+}
+_apply_request_auth "${ISTIO_DIR}/service-1/request-authentication.yaml.tpl"
+_apply_request_auth "${ISTIO_DIR}/service-3/request-authentication.yaml.tpl"
+
+# ── 10e: Deploy service-1 via kubectl ────────────────────────────────────────
 _info "Applying service-1 app manifests (ServiceAccount, Deployment, Service) ..."
 kubectl apply -R -f "${K8S_DIR}/service-1/"
 
+# ── 10f: Deploy service-2 via Helm ───────────────────────────────────────────
 _info "Deploying service-2 via Helm ..."
 if helm status service-2 -n service-2 &>/dev/null; then
   _info "service-2 Helm release already exists — skipping install"
@@ -282,6 +319,7 @@ else
   helm install service-2 "${HELM_DIR}/service-2/" -n service-2
 fi
 
+# ── 10g: Deploy service-3 via Helm ───────────────────────────────────────────
 _info "Deploying service-3 via Helm ..."
 if helm status service-3 -n service-3 &>/dev/null; then
   _info "service-3 Helm release already exists — skipping install"
@@ -297,8 +335,12 @@ kubectl rollout status deployment/service-3 -n service-3 --timeout=120s
 _ok "All manifests applied and services deployed"
 
 echo
+echo "  Test JWT token for curl validation:"
+echo "  TOKEN=\$(cat ${JWT_DIR}/token.jwt)"
+echo "  curl -H \"Authorization: Bearer \$TOKEN\" -H \"Host: service-1.local\" http://<GW_IP>/"
+echo
 _ok "Bootstrap complete. k3s cluster + Istio service mesh are ready."
 _ok "Verify nodes       : kubectl get nodes -o wide"
 _ok "Verify Istio       : istioctl version"
-_ok "Verify policies    : kubectl get peerauthentication,gateway,virtualservice,destinationrule --all-namespaces"
+_ok "Verify policies    : kubectl get peerauthentication,gateway,virtualservice,destinationrule,requestauthentication --all-namespaces"
 _ok "Verify pods        : kubectl get pods -A | grep -E '^(service-1|service-2|service-3)'"

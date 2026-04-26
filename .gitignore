@@ -17,5 +17,13 @@ concepts-notes.md
 .env
 .env.*
 secrets/
+
+# JWT artifacts — all generated locally by bootstrap.sh via infra/jwt/generate.py.
+# Nothing in infra/jwt/ is committed: private key is a secret, and public/token
+# files are derived artifacts that must match the private key on each machine.
+infra/jwt/private.pem
+infra/jwt/public.pem
+infra/jwt/jwks.json
+infra/jwt/token.jwt
 cheatsheet.md
 docs/apps-constraints.md
