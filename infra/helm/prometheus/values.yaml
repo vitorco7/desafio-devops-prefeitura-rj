@@ -1,0 +1,86 @@
+# Prometheus values — minimal install for KEDA integration
+# Chart: prometheus-community/prometheus v29.2.1 (appVersion: v3.11.2)
+# Namespace: monitoring
+#
+# Only the prometheus-server component is enabled.
+# All other sub-charts are disabled to reduce memory footprint on 4 GiB nodes.
+# Istio scrape configuration is added in Step 38 via helm upgrade.
+
+# ── Disabled sub-charts ────────────────────────────────────────────────────────
+alertmanager:
+  enabled: false
+
+kube-state-metrics:
+  enabled: false
+
+prometheus-node-exporter:
+  enabled: false
+
+prometheus-pushgateway:
+  enabled: false
+
+# ── Prometheus server ──────────────────────────────────────────────────────────
+server:
+  # No persistent volume — avoids local-path multi-node scheduling issues
+  persistentVolume:
+    enabled: false
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  # Retain 6 hours of data — sufficient for a demo session
+  retention: 6h
+
+  # Expose via ClusterIP only — KEDA queries it from within the cluster
+  service:
+    type: ClusterIP
+    servicePort: 80
+
+# ── Istio scrape configuration ─────────────────────────────────────────────────
+# extraScrapeConfigs is a TOP-LEVEL chart key (not under server:).
+# Two dedicated jobs as specified in the challenge instructions:
+#   1. istiod — control plane metrics on port 8080
+#   2. envoy-stats — sidecar metrics on port 15090 (istio_requests_total, etc.)
+#
+# NOTE: The challenge's original envoy-stats rule filtered by
+# __meta_kubernetes_pod_container_port_name. That rule worked for older Istio
+# versions where istio-proxy was a regular container. Istio 1.29 uses Kubernetes
+# native sidecars (istio-proxy as initContainer with restartPolicy: Always).
+# Prometheus role:pod does not iterate initContainers for port labels, so the
+# original filter matched zero pods. Fixed by filtering on the
+# prometheus.io/path annotation instead, which Istio injection always sets.
+extraScrapeConfigs: |
+  - job_name: istiod
+    kubernetes_sd_configs:
+      - role: endpoints
+        namespaces:
+          names: [istio-system]
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_service_name, __meta_kubernetes_endpoint_port_name]
+        action: keep
+        regex: "istiod;http-monitoring"
+
+  - job_name: envoy-stats
+    metrics_path: /stats/prometheus
+    kubernetes_sd_configs:
+      - role: pod
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+        action: keep
+        regex: "/stats/prometheus"
+      - source_labels: [__address__]
+        action: replace
+        regex: '([^:]+)(?::\d+)?'
+        replacement: "$1:15090"
+        target_label: __address__
+      - action: labelmap
+        regex: __meta_kubernetes_pod_label_(.+)
+      - source_labels: [__meta_kubernetes_namespace]
+        target_label: namespace
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: pod_name

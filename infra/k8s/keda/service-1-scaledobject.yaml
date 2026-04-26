@@ -1,0 +1,28 @@
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: service-1-scaledobject
+  namespace: service-1
+spec:
+  scaleTargetRef:
+    name: service-1
+
+  minReplicaCount: 1
+  maxReplicaCount: 5
+
+  # Query Prometheus every 15 seconds
+  pollingInterval: 15
+
+  # Wait 60 seconds after load drops before scaling down
+  # (default is 300s — shortened for demo visibility)
+  cooldownPeriod: 60
+
+  triggers:
+  - type: prometheus
+    metadata:
+      serverAddress: http://prometheus-server.monitoring.svc.cluster.local
+      metricName: istio_requests_per_second
+      # Scale up when total RPS exceeds 5 × current_replicas
+      threshold: "5"
+      query: |
+        sum(rate(istio_requests_total{destination_workload="service-1",destination_namespace="service-1",response_code!~"5.."}[1m]))

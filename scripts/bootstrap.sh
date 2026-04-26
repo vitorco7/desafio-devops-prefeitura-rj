@@ -14,7 +14,9 @@
 #   8. Joins k3s agents via Ansible
 #   9. Validates k3s cluster node readiness
 #  10. Installs Istio 1.29.2 on the cluster (istioctl + default profile)
-#  11. Applies Istio manifests (namespaces, Gateway, PeerAuthentication, VirtualService, DestinationRule)
+#  11. Applies Istio manifests (namespaces, Gateway, PeerAuthentication, VirtualService,
+#      DestinationRule, AuthorizationPolicy) + deploys services + JWT setup
+#  12. Installs Prometheus (Helm) with Istio scrape configuration (bonus)
 #
 # Idempotency: safe to run multiple times. Each section checks current state
 # before making changes. Running on an already-provisioned machine is a no-op.
@@ -339,8 +341,79 @@ echo "  Test JWT token for curl validation:"
 echo "  TOKEN=\$(cat ${JWT_DIR}/token.jwt)"
 echo "  curl -H \"Authorization: Bearer \$TOKEN\" -H \"Host: service-1.local\" http://<GW_IP>/"
 echo
+# ── Step 11 (Bonus): Install Prometheus ─────────────────────────────────────
+# Prometheus is required for KEDA-based autoscaling (Step 12 onwards).
+# values.yaml includes Istio scrape configuration (istiod + envoy-stats jobs).
+# Installed in the 'monitoring' namespace, ClusterIP only.
+_step "11/12 — Installing Prometheus (Helm, monitoring namespace)"
+
+if ! command -v helm &>/dev/null; then
+  _info "Installing Helm ..."
+  curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+  _ok "Helm installed"
+fi
+
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts 2>/dev/null || true
+helm repo update prometheus-community
+
+kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f -
+
+if helm status prometheus -n monitoring &>/dev/null; then
+  _info "Prometheus release already exists — upgrading to apply latest values ..."
+  helm upgrade prometheus prometheus-community/prometheus \
+    --version 29.2.1 \
+    --namespace monitoring \
+    -f "${HELM_DIR}/prometheus/values.yaml" \
+    --wait --timeout 120s
+else
+  helm install prometheus prometheus-community/prometheus \
+    --version 29.2.1 \
+    --namespace monitoring \
+    -f "${HELM_DIR}/prometheus/values.yaml" \
+    --wait --timeout 120s
+fi
+
+kubectl rollout status deployment/prometheus-server -n monitoring --timeout=120s
+_ok "Prometheus running at prometheus-server.monitoring.svc.cluster.local:80"
+
+# ── Step 12 (Bonus): Install KEDA ─────────────────────────────────────────────
+# KEDA bridges Prometheus metrics to the Kubernetes HPA.
+# It installs a custom metrics API server so HPA can query Prometheus values.
+# The ScaledObject (Step 13) uses the scaledobjects.keda.sh CRD registered here.
+_step "12/12 — Installing KEDA (Helm, keda namespace)"
+
+helm repo add kedacore https://kedacore.github.io/charts 2>/dev/null || true
+helm repo update kedacore
+
+kubectl create namespace keda --dry-run=client -o yaml | kubectl apply -f -
+
+if helm status keda -n keda &>/dev/null; then
+  _info "KEDA release already exists — skipping install"
+else
+  helm install keda kedacore/keda \
+    --version 2.19.0 \
+    --namespace keda \
+    --wait \
+    --timeout 120s
+fi
+
+kubectl rollout status deployment/keda-operator -n keda --timeout=120s
+kubectl rollout status deployment/keda-operator-metrics-apiserver -n keda --timeout=120s
+_ok "KEDA running in keda namespace"
+
+# ── Step 13 (Bonus): Apply ScaledObject ───────────────────────────────────────
+# ScaledObject tells KEDA: poll Prometheus every 15s; scale service-1 between
+# 1 and 5 replicas based on istio_requests_total RPS (threshold: 5 req/s/replica).
+# KEDA automatically creates and manages the backing HPA.
+_step "13/13 — Applying ScaledObject for service-1"
+
+kubectl apply -f "${REPO_ROOT}/infra/k8s/keda/service-1-scaledobject.yaml"
+_ok "ScaledObject applied — KEDA will manage HPA for service-1"
+
+echo
 _ok "Bootstrap complete. k3s cluster + Istio service mesh are ready."
 _ok "Verify nodes       : kubectl get nodes -o wide"
 _ok "Verify Istio       : istioctl version"
-_ok "Verify policies    : kubectl get peerauthentication,gateway,virtualservice,destinationrule,requestauthentication --all-namespaces"
+_ok "Verify policies    : kubectl get peerauthentication,gateway,virtualservice,destinationrule,requestauthentication,authorizationpolicy --all-namespaces"
 _ok "Verify pods        : kubectl get pods -A | grep -E '^(service-1|service-2|service-3)'"
+_ok "Verify Prometheus  : kubectl get pods -n monitoring"
