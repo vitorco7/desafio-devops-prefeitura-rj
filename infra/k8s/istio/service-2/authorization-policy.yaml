@@ -1,0 +1,15 @@
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: service-2-allow-service-1
+  namespace: service-2
+spec:
+  selector:
+    matchLabels:
+      app: service-2
+  action: ALLOW
+  rules:
+  - from:
+    - source:
+        principals:
+        - "cluster.local/ns/service-1/sa/service-1"
