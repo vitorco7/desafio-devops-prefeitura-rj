@@ -13,9 +13,21 @@ spec:
   # Query Prometheus every 15 seconds
   pollingInterval: 15
 
-  # Wait 60 seconds after load drops before scaling down
-  # (default is 300s — shortened for demo visibility)
+  # Wait 60 seconds after metric drops before KEDA deactivates the trigger.
+  # NOTE: the HPA also has its own scaleDown stabilizationWindowSeconds
+  # (default 300s). We override it below to 60s so scale-down is observable
+  # in a demo session without waiting 5 minutes.
   cooldownPeriod: 60
+
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleDown:
+          stabilizationWindowSeconds: 60
+          policies:
+          - type: Percent
+            value: 100
+            periodSeconds: 60
 
   triggers:
   - type: prometheus
@@ -24,5 +36,8 @@ spec:
       metricName: istio_requests_per_second
       # Scale up when total RPS exceeds 5 × current_replicas
       threshold: "5"
+      # destination_workload_namespace is the correct Istio label (not destination_namespace).
+      # job="envoy-stats" prevents double-counting: the same Envoy endpoint is also scraped
+      # by the kubernetes-pods job, so without this filter every request appears twice.
       query: |
-        sum(rate(istio_requests_total{destination_workload="service-1",destination_namespace="service-1",response_code!~"5.."}[1m]))
+        sum(rate(istio_requests_total{job="envoy-stats",destination_workload="service-1",destination_workload_namespace="service-1",response_code!~"5.."}[1m]))

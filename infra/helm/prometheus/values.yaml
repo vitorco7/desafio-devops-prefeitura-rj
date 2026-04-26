@@ -66,6 +66,11 @@ extraScrapeConfigs: |
         regex: "istiod;http-monitoring"
 
   - job_name: envoy-stats
+    # Scrape every 15s so rate([1m]) has 4 data points — required for KEDA
+    # to see a non-zero metric during a 60-second load test.
+    # The default global scrape_interval is 1m, which produces at most 1
+    # sample per test run and causes rate() to return an empty result.
+    scrape_interval: 15s
     metrics_path: /stats/prometheus
     kubernetes_sd_configs:
       - role: pod
