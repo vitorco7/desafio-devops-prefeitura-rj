@@ -117,6 +117,16 @@ https://pkgs.k8s.io/core:/stable:/v1.33/deb/ /" \
   _ok "kubectl installed"
 fi
 
+# ── Helm (official install script) ───────────────────────────────────────────
+# Helm is used to deploy service-2, service-3, Prometheus, and KEDA.
+if command -v helm &>/dev/null; then
+  _ok "helm already installed — $(helm version --short 2>/dev/null || echo 'unknown version')"
+else
+  _info "Installing Helm ..."
+  curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+  _ok "helm installed"
+fi
+
 # ── Step 2: Incus group membership ───────────────────────────────────────────
 # The Incus socket (/run/incus/unix.socket) is owned by group 'incus'.
 # Without group membership, 'incus' and 'terraform apply' (via the Incus
@@ -400,12 +410,6 @@ echo
 # values.yaml includes Istio scrape configuration (istiod + envoy-stats jobs).
 # Installed in the 'monitoring' namespace, ClusterIP only.
 _step "11/12 — Installing Prometheus (Helm, monitoring namespace)"
-
-if ! command -v helm &>/dev/null; then
-  _info "Installing Helm ..."
-  curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-  _ok "Helm installed"
-fi
 
 helm repo add prometheus-community https://prometheus-community.github.io/helm-charts 2>/dev/null || true
 helm repo update prometheus-community
