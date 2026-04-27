@@ -114,6 +114,80 @@ flowchart LR
     keda -->|"HPA: min 1, max 5 replicas"| s1
 ```
 
+### Topologia interna por serviço
+
+Os diagramas abaixo detalham os serviços internamente: todo tráfego entra e sai pelo sidecar, que aplica as políticas de segurança (mTLS, SPIFFE, JWT) antes de repassar ao container da aplicação via HTTP local.
+
+#### namespace: service-1
+
+```mermaid
+flowchart LR
+    gw_s1["istio-ingressgateway"]
+
+    subgraph ns1i["namespace: service-1"]
+        subgraph pod1i["pod: service-1, httpbin, 1 a 5 replicas via KEDA HPA"]
+            ev_in1["Envoy sidecar inbound :15006<br/>RequestAuthentication: RS256, JWKS inline<br/>AuthorizationPolicy: SPIFFE ingressgateway-SA"]
+            app1i["httpbin :80<br/>plain HTTP local"]
+            ev_out1["Envoy sidecar outbound :15001<br/>inicia handshake mTLS para service-2"]
+        end
+    end
+
+    s2_dest["Envoy sidecar service-2<br/>(namespace: service-2)"]
+    prom_s1["Prometheus<br/>(namespace: monitoring)"]
+    keda_s1["KEDA operator<br/>(namespace: keda)"]
+
+    gw_s1 -->|"mTLS, JWT valido no header"| ev_in1
+    ev_in1 -->|"HTTP local"| app1i
+    app1i -->|"HTTP local"| ev_out1
+    ev_out1 -->|"mTLS cross-ns, SPIFFE service-1-SA"| s2_dest
+
+    prom_s1 -.->|"scrape :15090/stats/prometheus"| ev_in1
+    keda_s1 -.->|"HPA: min 1, max 5 replicas"| pod1i
+```
+
+#### namespace: service-2
+
+```mermaid
+flowchart LR
+    s1_src["Envoy sidecar service-1<br/>(namespace: service-1)"]
+    denied_s2["Qualquer outra origem"]
+
+    subgraph ns2i["namespace: service-2"]
+        subgraph pod2i["pod: service-2, httpbin, ClusterIP"]
+            ev_in2["Envoy sidecar inbound :15006<br/>PeerAuthentication: STRICT<br/>AuthorizationPolicy: SPIFFE service-1-SA somente"]
+            app2i["httpbin :80<br/>plain HTTP local"]
+        end
+    end
+
+    s1_src -->|"mTLS cross-ns, SPIFFE service-1-SA"| ev_in2
+    ev_in2 -->|"HTTP local"| app2i
+
+    denied_s2 -. "DENY: source.principal != service-1-SA" .-> ev_in2
+```
+
+#### namespace: service-3
+
+```mermaid
+flowchart LR
+    gw_s3["istio-ingressgateway"]
+
+    subgraph ns3i["namespace: service-3"]
+        subgraph pod3i["pod: service-3, httpbin"]
+            ev_in3["Envoy sidecar inbound :15006<br/>RequestAuthentication: RS256, JWKS inline<br/>AuthorizationPolicy: SPIFFE ingressgateway-SA"]
+            app3i["httpbin :80<br/>plain HTTP local"]
+        end
+    end
+
+    s1_deny["service-1"]
+    s2_deny["service-2"]
+
+    gw_s3 -->|"mTLS, JWT valido no header"| ev_in3
+    ev_in3 -->|"HTTP local"| app3i
+
+    s1_deny -. "DENY: source.principal != ingressgateway-SA" .-> ev_in3
+    s2_deny -. "DENY: source.principal != ingressgateway-SA" .-> ev_in3
+```
+
 ## Estrutura do repositório
 
 ```
