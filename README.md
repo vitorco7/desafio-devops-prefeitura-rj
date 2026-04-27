@@ -9,7 +9,7 @@ Cluster k3s multi-nó com Istio service mesh, autenticação JWT, mTLS entre ser
 1. [Justificativa da ferramenta de provisionamento](#1-justificativa-da-ferramenta-de-provisionamento)
 2. [Arquitetura](#2-arquitetura)
 3. [Pré-requisitos](#3-pré-requisitos)
-4. [Passo a passo do zero](#4-passo-a-passo-do-zero)
+4. [Passo a passo de execução do projeto do zero](#4-passo-a-passo-de-execução-do-projeto-do-zero)
 5. [JWT: geração e configuração](#5-jwt-geração-e-configuração)
 6. [Comandos de validação](#6-comandos-de-validação)
 7. [Justificativa de decisões não triviais](#7-justificativa-de-decisões-não-triviais)
