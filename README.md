@@ -215,7 +215,7 @@ scripts/
 ├── load-test.js                — Script k6 para demonstração de autoscaling
 └── fresh-install-testing/
     ├── create-vm.sh            — Cria VM Ubuntu 24.04 virgem para teste de reprodutibilidade
-    ├── run-vm.sh             — Roda dentro da VM: clona repo e executa bootstrap.sh
+    ├── deploy-cluster.sh       — Roda dentro da VM: clona repo e executa bootstrap.sh
     └── teardown-vm.sh          — Destrói a VM ao final do teste
 ```
 
@@ -497,13 +497,13 @@ bash scripts/fresh-install-testing/create-vm.sh
 incus exec fresh-ubuntu -- su -l tester
 
 # 3. Dentro da VM: executar o script de teste
-bash run-vm.sh
+bash deploy-cluster.sh
 
 # 4. Ao terminar, destruir a VM (de volta ao host)
 bash scripts/fresh-install-testing/teardown-vm.sh
 ```
 
-O `run-vm.sh` clona o repositório do GitHub e executa `bootstrap.sh` exatamente como na Opção A. O comportamento esperado é idêntico ao de uma máquina Ubuntu 24.04 limpa.
+O `deploy-cluster.sh` clona o repositório do GitHub e executa `bootstrap.sh` exatamente como na Opção A. O comportamento esperado é idêntico ao de uma máquina Ubuntu 24.04 limpa.
 
 > **Nota**: durante o bootstrap, o script executa `exec sg incus-admin "bash $script"` para ativar o grupo `incus-admin` sem necessidade de logout. Isso reinicia o processo do script a partir do início — as etapas já concluídas são puladas pelas checagens de idempotência. É comportamento esperado.
 

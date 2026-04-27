@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# run-vm.sh -- VM script. Runs INSIDE the test VM as user 'tester'.
+# deploy-cluster.sh -- VM script. Runs INSIDE the test VM as user 'tester'.
 #
 # Simulates a real user following the README on a clean Ubuntu 24.04 machine:
 #   1. Install git
@@ -10,10 +10,10 @@
 # inside the VM -- it has no dependency on the host machine or local files.
 #
 # Usage (from inside the VM):
-#   bash run-vm.sh
+#   bash deploy-cluster.sh
 #
 # Override the repo URL if testing a fork:
-#   REPO_URL=https://github.com/your-fork/... bash run-vm.sh
+#   REPO_URL=https://github.com/your-fork/... bash deploy-cluster.sh
 
 set -euo pipefail
 

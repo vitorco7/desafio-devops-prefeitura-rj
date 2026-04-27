@@ -13,11 +13,11 @@
 #   5. Creates the VM (nested KVM, 20 GiB RAM, 30 GiB disk)
 #   6. Waits for cloud-init to finish
 #   7. Creates a non-root user 'tester' with passwordless sudo
-#   8. Copies run-vm.sh into the VM at /home/tester/run-vm.sh
+#   8. Copies deploy-cluster.sh into the VM at /home/tester/deploy-cluster.sh
 #
 # After this script, shell into the VM and run the test:
 #   incus exec fresh-ubuntu -- su -l tester
-#   bash run-vm.sh
+#   bash deploy-cluster.sh
 
 set -euo pipefail
 
@@ -138,11 +138,11 @@ incus exec "$VM_NAME" -- bash -c "
   chmod 440 /etc/sudoers.d/${TEST_USER}
 "
 
-# ── Step 9: Inject run-vm.sh into the VM ────────────────────────────────────
-echo "Copying run-vm.sh into VM at /home/${TEST_USER}/run-vm.sh..."
-incus file push "${SCRIPT_DIR}/run-vm.sh" "${VM_NAME}/home/${TEST_USER}/run-vm.sh"
-incus exec "$VM_NAME" -- chown "${TEST_USER}:${TEST_USER}" "/home/${TEST_USER}/run-vm.sh"
-incus exec "$VM_NAME" -- chmod +x "/home/${TEST_USER}/run-vm.sh"
+# ── Step 9: Inject deploy-cluster.sh into the VM ────────────────────────────────────
+echo "Copying deploy-cluster.sh into VM at /home/${TEST_USER}/deploy-cluster.sh..."
+incus file push "${SCRIPT_DIR}/deploy-cluster.sh" "${VM_NAME}/home/${TEST_USER}/deploy-cluster.sh"
+incus exec "$VM_NAME" -- chown "${TEST_USER}:${TEST_USER}" "/home/${TEST_USER}/deploy-cluster.sh"
+incus exec "$VM_NAME" -- chmod +x "/home/${TEST_USER}/deploy-cluster.sh"
 
 echo ""
 echo "[OK] VM '$VM_NAME' is ready."
@@ -151,4 +151,4 @@ echo "Next steps:"
 echo "  1. Shell into the VM:"
 echo "       incus exec fresh-ubuntu -- su -l tester"
 echo "  2. Inside the VM, run the test:"
-echo "       bash run-vm.sh"
+echo "       bash deploy-cluster.sh"
