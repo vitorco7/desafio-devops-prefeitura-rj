@@ -296,7 +296,9 @@ O script executa as seguintes etapas em ordem, com checagens de idempotência em
 
 Tempo esperado em primeira execução: 15–25 minutos (dominado pelo download das imagens Ubuntu e do k3s).
 
-### Opção B — Passo a passo manual
+### Opção B — Passo a passo manual 
+
+Observação: Nem todos os passos foram validados individualmente, recomendado usar o bootstrap automático para evitar erros de configuração. Os comandos abaixo seguem a mesma ordem do script.
 
 #### 1. Instalar dependências do host
 
@@ -332,20 +334,48 @@ sudo apt-get update && sudo apt-get install -y kubectl
 
 # Helm
 curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+# k6 (Grafana apt)
+curl -fsSL https://dl.k6.io/key.gpg \
+  | sudo gpg --dearmor -o /etc/apt/keyrings/k6-archive-keyring.gpg
+echo "deb [signed-by=/etc/apt/keyrings/k6-archive-keyring.gpg] \
+https://dl.k6.io/deb stable main" \
+  | sudo tee /etc/apt/sources.list.d/k6.list
+sudo apt-get update && sudo apt-get install -y k6
 ```
 
-#### 2. Configurar UFW e inicializar Incus
+#### 2. Configurar grupos, inicializar Incus e UFW
 
 ```bash
-incus admin init --minimal
+# Adicionar usuário aos grupos incus e incus-admin
+# (necessário para o provider Terraform lxc/incus acessar o projeto 'default' no Incus 6.x)
+sudo usermod -aG incus,incus-admin $USER
+
+# Ativar os grupos na sessão atual sem logout/login
+newgrp incus-admin
+
+# Apontar socket admin (necessário para o Terraform e para incus admin init)
+export INCUS_SOCKET="/var/lib/incus/unix.socket"
+
+# Inicializar Incus (requer sudo antes da primeira init)
+sudo incus admin init --minimal
+
+# Configurar CLI para usar o projeto 'default'
+# (sem isso, incus exec / terraform não enxergam as VMs criadas)
+incus project switch default
+
+# Configurar UFW para bridge k3sbr0 (DHCP, DNS, NAT)
 sudo bash scripts/setup-host.sh
 ```
 
 #### 3. Provisionar VMs
 
 ```bash
-terraform -chdir=infra/terraform init
-terraform -chdir=infra/terraform apply -auto-approve
+# INCUS_SOCKET deve estar exportado (ver passo 2)
+export INCUS_SOCKET="/var/lib/incus/unix.socket"
+
+terraform -chdir=infra/terraform init -upgrade -input=false
+terraform -chdir=infra/terraform apply -auto-approve -input=false
 ```
 
 #### 4. Instalar k3s
@@ -414,17 +444,20 @@ kubectl rollout status deployment/service-3 -n service-3 --timeout=120s
 # Prometheus
 helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
 helm repo update prometheus-community
-kubectl create namespace monitoring
+kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f -
 helm install prometheus prometheus-community/prometheus \
   --version 29.2.1 -n monitoring \
   -f infra/helm/prometheus/values.yaml \
   --wait --timeout 120s
+kubectl rollout status deployment/prometheus-server -n monitoring --timeout=120s
 
 # KEDA
 helm repo add kedacore https://kedacore.github.io/charts
 helm repo update kedacore
-kubectl create namespace keda
+kubectl create namespace keda --dry-run=client -o yaml | kubectl apply -f -
 helm install keda kedacore/keda --version 2.19.0 -n keda --wait --timeout 120s
+kubectl rollout status deployment/keda-operator -n keda --timeout=120s
+kubectl rollout status deployment/keda-operator-metrics-apiserver -n keda --timeout=120s
 
 # ScaledObject
 kubectl apply -f infra/k8s/keda/service-1-scaledobject.yaml
@@ -433,6 +466,8 @@ kubectl apply -f infra/k8s/keda/service-1-scaledobject.yaml
 ---
 
 ## 5. JWT: geração e configuração
+
+Detalhamentos dos critérios utilizados para a escolha  de implementação podem ser encontrados em [Decisões §7](#7-justificativa-de-decisões-não-triviais).
 
 ### Por que JWT estático
 
@@ -729,7 +764,7 @@ except urllib.error.HTTPError as e:
 
 ---
 
-## 7. Justificativa de decisões não triviais
+## 7. Justificativa de decisões de implementação
 
 ### Versão do k3s: v1.34.6+k3s1
 
