@@ -180,6 +180,14 @@ sudo "$REPO_ROOT/scripts/setup-host.sh"
 # ── Step 5: Provision VMs with Terraform ─────────────────────────────────────
 _step "5/8 — Provisioning VMs with Terraform"
 
+# On Incus 6.x (zabbly), the user socket (/run/incus/unix.socket) places each
+# non-root user in an isolated project (user-<uid>), blocking access to the
+# 'default' project where VMs will be created.  The admin socket
+# (/var/lib/incus/unix.socket) has no such restriction.
+# Both vcossetti (host) and tester (test VM) are members of incus-admin, so
+# the admin socket is accessible in both contexts.
+export INCUS_SOCKET="/var/lib/incus/unix.socket"
+
 _info "Running terraform init ..."
 terraform -chdir="$TERRAFORM_DIR" init -upgrade -input=false
 
