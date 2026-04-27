@@ -130,11 +130,16 @@ _step "2/8 — Incus group membership"
 
 # We need two groups active in the process session:
 #   incus       — owns /run/incus/unix.socket (user CLI socket)
-#   incus-admin — required by Terraform provider (Incus 6.x) to access project
-#                 'default' via the admin socket after initialization
+#   incus-admin — owns /var/lib/incus/unix.socket (admin socket, required for
+#                 'incus admin init' and Terraform provider on Incus 6.x to
+#                 access project 'default')
 #
-# 'sg incus-admin' calls initgroups() which reloads ALL supplementary groups
-# from /etc/group, activating newly added memberships without a logout/login.
+# IMPORTANT: id -nG "$USER" reads /etc/group (database) — it tells us if the
+# user is REGISTERED in a group, NOT if the group is ACTIVE in this session.
+# Supplementary groups are frozen at exec time. id -G (no argument) returns
+# the ACTUAL active GIDs of the current process.
+# We re-exec with 'sg incus-admin' whenever incus-admin is not active,
+# even on re-runs where the user is already in /etc/group.
 
 _needs_reexec=0
 if ! id -nG "$USER" | tr ' ' '\n' | grep -q '^incus$'; then
@@ -149,15 +154,27 @@ if getent group incus-admin &>/dev/null \
   _needs_reexec=1
 fi
 
+# Check if incus-admin is ACTIVE in the current session (not just in /etc/group).
+# Catches re-runs started from a plain shell without sg.
+if [[ $_needs_reexec -eq 0 ]] && getent group incus-admin &>/dev/null; then
+  _incus_admin_gid=$(getent group incus-admin | cut -d: -f3)
+  if ! id -G | tr ' ' '\n' | grep -qx "$_incus_admin_gid"; then
+    _info "incus-admin registered but not active in session — re-executing ..."
+    _needs_reexec=1
+  fi
+fi
+
 if [[ $_needs_reexec -eq 1 ]]; then
   _info "Re-executing under incus-admin group context ..."
+  # sg incus-admin calls initgroups() loading ALL groups for $USER from /etc/group,
+  # so both 'incus' and 'incus-admin' become active supplementary groups.
   _script="$(realpath "${BASH_SOURCE[0]}")"
   exec sg incus-admin "bash \"$_script\""
 fi
-_ok "User '$USER' is in the 'incus' and 'incus-admin' groups"
+_ok "User '$USER' has incus and incus-admin active in this session"
 
-# Export admin socket for Terraform provider (used at Step 5).
-# Set here so the path is consistent across all steps.
+# Admin socket for all subsequent Incus operations (CLI + Terraform provider).
+# On Incus 6.x the user socket isolates each non-root user in project user-<uid>.
 export INCUS_SOCKET="/var/lib/incus/unix.socket"
 
 # ── Step 3: Initialize Incus ─────────────────────────────────────────────────
