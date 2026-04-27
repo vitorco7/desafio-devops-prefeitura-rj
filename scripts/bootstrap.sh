@@ -128,28 +128,36 @@ fi
 # permissions — no logout/login required.
 _step "2/8 — Incus group membership"
 
-if id -nG "$USER" | tr ' ' '\n' | grep -q '^incus$'; then
-  _ok "User '$USER' is already in the 'incus' group"
-else
-  # Also add to incus-admin: required on Incus 6.x (zabbly) for 'incus admin init'
-  # because the admin socket (/var/lib/incus/unix.socket) is owned by incus-admin.
-  _info "Adding '$USER' to the 'incus' and 'incus-admin' groups and re-executing ..."
+# We need two groups:
+#   incus       — owns /run/incus/unix.socket (CLI + provider user socket)
+#   incus-admin — owns /var/lib/incus/unix.socket (admin socket, required for
+#                 Terraform provider on Incus 6.x zabbly to reach project 'default')
+#
+# After usermod we re-exec under both groups using nested sg calls.
+# sg only activates one group at a time, so the inner sg activates incus-admin
+# while the outer sg activates incus — both end up in the session.
+
+_needs_reexec=0
+if ! id -nG "$USER" | tr ' ' '\n' | grep -q '^incus$'; then
+  _info "Adding '$USER' to the 'incus' group ..."
   sudo usermod -aG incus "$USER"
-  getent group incus-admin &>/dev/null && sudo usermod -aG incus-admin "$USER"
-  exec sg incus "$(realpath "${BASH_SOURCE[0]}")"
+  _needs_reexec=1
+fi
+if getent group incus-admin &>/dev/null && ! id -nG "$USER" | tr ' ' '\n' | grep -q '^incus-admin$'; then
+  _info "Adding '$USER' to the 'incus-admin' group ..."
+  sudo usermod -aG incus-admin "$USER"
+  _needs_reexec=1
 fi
 
-# Incus 6.x assigns each non-root user their own project (user-<uid>) by default.
-# Terraform provisions VMs in the 'default' project, so we must switch here.
-# This is idempotent — switching to the already-active project is a no-op.
-if incus project list --format csv 2>/dev/null | grep -q '^default,'; then
-  current_project=$(incus project list --format csv 2>/dev/null | grep '(current)' | cut -d, -f1)
-  if [ "${current_project}" != "default" ]; then
-    _info "Switching Incus project to 'default' ..."
-    incus project switch default
-  fi
-  _ok "Incus project: default"
+if [[ $_needs_reexec -eq 1 ]]; then
+  _info "Re-executing under new group context ..."
+  # sg only activates one supplemental group per invocation.
+  # Nesting two sg calls activates both incus-admin (outer) and incus (inner)
+  # in the final session. BOOTSTRAP_SCRIPT is exported so the inner sg can read it.
+  export BOOTSTRAP_SCRIPT="$(realpath "${BASH_SOURCE[0]}")"
+  exec sg incus-admin "sg incus \"$BOOTSTRAP_SCRIPT\""
 fi
+_ok "User '$USER' is in the 'incus' and 'incus-admin' groups"
 
 # ── Step 3: Initialize Incus ─────────────────────────────────────────────────
 # 'incus admin init --minimal' creates a default dir-backend storage pool and
