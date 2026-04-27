@@ -212,7 +212,11 @@ infra/
 scripts/
 ├── bootstrap.sh                — Setup completo do zero (idempotente)
 ├── setup-host.sh               — Configura UFW para bridge Incus
-└── load-test.js                — Script k6 para demonstração de autoscaling
+├── load-test.js                — Script k6 para demonstração de autoscaling
+└── fresh-install-testing/
+    ├── create-vm.sh            — Cria VM Ubuntu 24.04 virgem para teste de reprodutibilidade
+    ├── run-test.sh             — Roda dentro da VM: clona repo e executa bootstrap.sh
+    └── teardown-vm.sh          — Destrói a VM ao final do teste
 ```
 
 ### Onde o JWT é validado
@@ -265,7 +269,7 @@ Todas as demais dependências (Incus, Terraform, Ansible, kubectl, Helm, k6, ist
 
 ---
 
-## 4. Passo a passo do zero
+## 4. Passo a passo de execução do projeto
 
 ### Opção A — Bootstrap automático (recomendado)
 
@@ -462,6 +466,30 @@ kubectl rollout status deployment/keda-operator-metrics-apiserver -n keda --time
 # ScaledObject
 kubectl apply -f infra/k8s/keda/service-1-scaledobject.yaml
 ```
+
+### Opção C — Execução em VM virgem via Incus aninhado
+
+> **Pré-requisito**: esta opção requer o Incus já instalado e inicializado no host. Se você está em uma máquina limpa, use a **Opção A** diretamente — ela instala todas as dependências, incluindo o Incus.
+
+Para quem já tem o Incus disponível no host e prefere executar o projeto em um ambiente completamente isolado, os scripts em `scripts/fresh-install-testing/` criam uma VM Ubuntu 24.04 virgem via KVM aninhado, executam o bootstrap dentro dela e permitem destruí-la ao final.
+
+```bash
+# 1. Criar a VM virgem (4 vCPU, 20 GiB RAM, 30 GiB disco)
+bash scripts/fresh-install-testing/create-vm.sh
+
+# 2. Entrar na VM como usuário não-root
+incus exec fresh-ubuntu -- su -l tester
+
+# 3. Dentro da VM: executar o script de teste
+bash run-test.sh
+
+# 4. Ao terminar, destruir a VM (de volta ao host)
+bash scripts/fresh-install-testing/teardown-vm.sh
+```
+
+O `run-test.sh` clona o repositório do GitHub e executa `bootstrap.sh` exatamente como na Opção A. O comportamento esperado é idêntico ao de uma máquina Ubuntu 24.04 limpa.
+
+> **Nota**: durante o bootstrap, o script executa `exec sg incus-admin "bash $script"` para ativar o grupo `incus-admin` sem necessidade de logout. Isso reinicia o processo do script a partir do início — as etapas já concluídas são puladas pelas checagens de idempotência. É comportamento esperado.
 
 ---
 
