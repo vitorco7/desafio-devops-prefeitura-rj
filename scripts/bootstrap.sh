@@ -129,13 +129,15 @@ fi
 _step "2/8 — Incus group membership"
 
 # We need two groups:
-#   incus       — owns /run/incus/unix.socket (CLI + provider user socket)
+#   incus       — owns /run/incus/unix.socket (CLI user socket)
 #   incus-admin — owns /var/lib/incus/unix.socket (admin socket, required for
-#                 Terraform provider on Incus 6.x zabbly to reach project 'default')
+#                 'incus admin init' and Terraform provider on Incus 6.x zabbly
+#                 to reach project 'default')
 #
-# After usermod we re-exec under both groups using nested sg calls.
-# sg only activates one group at a time, so the inner sg activates incus-admin
-# while the outer sg activates incus — both end up in the session.
+# id -nG "$USER" reads /etc/group (NSS) and tells us about group DATABASE
+# membership — not whether the group is active in the current process session.
+# We use 'test -r /var/lib/incus/unix.socket' as the ground-truth check:
+# if the admin socket is readable, incus-admin is active in this process.
 
 _needs_reexec=0
 if ! id -nG "$USER" | tr ' ' '\n' | grep -q '^incus$'; then
@@ -149,15 +151,30 @@ if getent group incus-admin &>/dev/null && ! id -nG "$USER" | tr ' ' '\n' | grep
   _needs_reexec=1
 fi
 
+# Even when already listed in /etc/group, the current session may not have the
+# group active in process credentials (supplementary groups are frozen at login).
+# Test the admin socket directly — if it's not readable, we need a re-exec.
+if [[ $_needs_reexec -eq 0 ]] \
+    && getent group incus-admin &>/dev/null \
+    && ! test -r /var/lib/incus/unix.socket 2>/dev/null; then
+  _info "Admin socket not accessible in current session — re-executing ..."
+  _needs_reexec=1
+fi
+
 if [[ $_needs_reexec -eq 1 ]]; then
-  _info "Re-executing under new group context ..."
-  # sg only activates one supplemental group per invocation.
-  # Nesting two sg calls activates both incus-admin (outer) and incus (inner)
-  # in the final session. BOOTSTRAP_SCRIPT is exported so the inner sg can read it.
-  export BOOTSTRAP_SCRIPT="$(realpath "${BASH_SOURCE[0]}")"
-  exec sg incus-admin "sg incus \"$BOOTSTRAP_SCRIPT\""
+  _info "Re-executing under incus-admin group context ..."
+  # Single sg incus-admin: sets EGID=incus-admin AND calls initgroups() which
+  # loads ALL groups for $USER from /etc/group, including 'incus'.
+  # After this re-exec, both sockets are accessible.
+  _script="$(realpath "${BASH_SOURCE[0]}")"
+  exec sg incus-admin "bash \"$_script\""
 fi
 _ok "User '$USER' is in the 'incus' and 'incus-admin' groups"
+
+# Export the admin socket for all subsequent Incus operations (CLI + Terraform).
+# On Incus 6.x the user socket isolates each non-root user in project user-<uid>.
+# The admin socket has no project restriction and is needed by Terraform provider.
+export INCUS_SOCKET="/var/lib/incus/unix.socket"
 
 # ── Step 3: Initialize Incus ─────────────────────────────────────────────────
 # 'incus admin init --minimal' creates a default dir-backend storage pool and
@@ -166,7 +183,7 @@ _ok "User '$USER' is in the 'incus' and 'incus-admin' groups"
 # we need. The check below makes this step idempotent.
 _step "3/8 — Initializing Incus"
 
-if incus storage list 2>/dev/null | grep -q 'default'; then
+if incus storage list --format csv 2>/dev/null | grep -q '^default,'; then
   _ok "Incus already initialized (default storage pool present)"
 else
   _info "Running 'incus admin init --minimal' ..."
