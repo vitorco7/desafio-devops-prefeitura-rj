@@ -215,7 +215,7 @@ scripts/
 ├── load-test.js                — Script k6 para demonstração de autoscaling
 └── fresh-install-testing/
     ├── create-vm.sh            — Cria VM Ubuntu 24.04 virgem para teste de reprodutibilidade
-    ├── run-test.sh             — Roda dentro da VM: clona repo e executa bootstrap.sh
+    ├── run-vm.sh             — Roda dentro da VM: clona repo e executa bootstrap.sh
     └── teardown-vm.sh          — Destrói a VM ao final do teste
 ```
 
@@ -497,13 +497,13 @@ bash scripts/fresh-install-testing/create-vm.sh
 incus exec fresh-ubuntu -- su -l tester
 
 # 3. Dentro da VM: executar o script de teste
-bash run-test.sh
+bash run-vm.sh
 
 # 4. Ao terminar, destruir a VM (de volta ao host)
 bash scripts/fresh-install-testing/teardown-vm.sh
 ```
 
-O `run-test.sh` clona o repositório do GitHub e executa `bootstrap.sh` exatamente como na Opção A. O comportamento esperado é idêntico ao de uma máquina Ubuntu 24.04 limpa.
+O `run-vm.sh` clona o repositório do GitHub e executa `bootstrap.sh` exatamente como na Opção A. O comportamento esperado é idêntico ao de uma máquina Ubuntu 24.04 limpa.
 
 > **Nota**: durante o bootstrap, o script executa `exec sg incus-admin "bash $script"` para ativar o grupo `incus-admin` sem necessidade de logout. Isso reinicia o processo do script a partir do início — as etapas já concluídas são puladas pelas checagens de idempotência. É comportamento esperado.
 
@@ -965,6 +965,10 @@ sum(rate(istio_requests_total{
 
 **Pré-requisito**: cluster com service-1 running, Prometheus e KEDA instalados.
 
+#### Opções A e B — execução direta no host
+
+Abra três terminais no host e execute:
+
 ```bash
 # Terminal A — observar pods
 kubectl get pods -n service-1 -w
@@ -979,6 +983,36 @@ GW_IP=$(kubectl get svc istio-ingressgateway -n istio-system \
 TOKEN=$(cat infra/jwt/token.jwt)
 k6 run -e TOKEN=$TOKEN -e GW_IP=$GW_IP scripts/load-test.js
 ```
+
+#### Opção C — execução dentro da VM
+
+Quando o bootstrap é executado via `create-vm.sh`, o cluster inteiro roda dentro da VM `fresh-ubuntu`. Todos os comandos (`kubectl`, `k6`, etc.) precisam ser executados de dentro da VM. É sugerido abrir 3 terminais diferentes no host, entrar na VM em cada um e executar os comandos de observação e teste em paralelo:
+
+```bash
+# Terminal A (host) — sessão na VM para observar pods
+incus exec fresh-ubuntu -- su -l tester
+# dentro da VM:
+kubectl get pods -n service-1 -w
+```
+
+```bash
+# Terminal B (host) — sessão na VM para observar HPA
+incus exec fresh-ubuntu -- su -l tester
+# dentro da VM:
+kubectl get hpa -n service-1 -w
+```
+
+```bash
+# Terminal C (host) — sessão na VM para executar k6
+incus exec fresh-ubuntu -- su -l tester
+# dentro da VM:
+cd ~/desafio-devops-prefeitura-rj
+GW_IP=$(kubectl get svc istio-ingressgateway -n istio-system \
+  -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+TOKEN=$(cat infra/jwt/token.jwt)
+k6 run -e TOKEN=$TOKEN -e GW_IP=$GW_IP scripts/load-test.js
+```
+
 
 O script k6 (`scripts/load-test.js`) usa 20 VUs com `sleep(0.5)` entre requisições → ~40 req/s. Cada requisição inclui `Host: service-1.local` e `Authorization: Bearer $TOKEN`.
 
