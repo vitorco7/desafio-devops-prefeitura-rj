@@ -276,7 +276,7 @@ O projeto pode ser executado do zero de três formas:
 - B) passo a passo manual seguindo os comandos, 
 - C) execução dentro de uma VM Ubuntu virgem criada via Incus aninhado (recomendado para execução isolada numa máquina virtual limpa).
 
-### Opção A — Bootstrap automático (recomendado)
+### Opção A — Bootstrap automático
 
 ```bash
 git clone https://github.com/vitorco7/desafio-devops-prefeitura-rj.git
