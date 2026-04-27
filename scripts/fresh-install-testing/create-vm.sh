@@ -3,7 +3,7 @@
 # for reproducibility testing.
 #
 # What this script does:
-#   1. Creates the VM (nested KVM, 20 GiB RAM, 40 GiB disk)
+#   1. Creates the VM (nested KVM, 20 GiB RAM, 30 GiB disk)
 #   2. Waits for cloud-init to finish
 #   3. Creates a non-root user 'tester' with passwordless sudo
 #   4. Copies run-test.sh into the VM at /home/tester/run-test.sh
@@ -21,7 +21,7 @@ VM_NAME="fresh-ubuntu"
 VM_IMAGE="images:ubuntu/24.04"
 VM_CPU=4
 VM_RAM="20GiB"
-VM_DISK="40GiB"
+VM_DISK="30GiB"
 TEST_USER="tester"
 
 # -- Idempotency check ---------------------------------------------------------

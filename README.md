@@ -165,10 +165,11 @@ Esta identidade aparece como `source.principals` nas `AuthorizationPolicy`:
 - Ubuntu 22.04 ou 24.04 LTS (testado em 24.04)
 - Conexão com a internet (downloads de pacotes e imagens)
 - Usuário não-root com `sudo` sem senha (ou senha disponível no terminal)
-- ~15 GiB de espaço em disco livre
-- ~12 GiB de RAM disponível no host (3 VMs × 4 GiB + overhead)
+- **CPU**: 4+ cores (as 3 VMs k3s alocam 2 vCPU cada — os vCPUs são virtuais e compartilham os cores físicos, mas menos de 4 cores físicos causa contenção)
+- **RAM**: 16 GiB mínimo, 20 GiB recomendado (3 VMs × 4 GiB = 12 GiB + overhead do host OS e do Incus)
+- **Disco**: ~30 GiB livres (3 VMs × ~8 GiB cada: imagem Ubuntu + k3s + imagens de container do Istio, httpbin, Prometheus, KEDA)
 
-Todas as demais dependências (Incus, Terraform, Ansible, kubectl, Helm, istioctl) são instaladas pelo script `bootstrap.sh`.
+Todas as demais dependências (Incus, Terraform, Ansible, kubectl, Helm, k6, istioctl) são instaladas pelo script `bootstrap.sh`.
 
 ---
 
