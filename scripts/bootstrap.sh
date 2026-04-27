@@ -128,16 +128,13 @@ fi
 # permissions — no logout/login required.
 _step "2/8 — Incus group membership"
 
-# We need two groups:
-#   incus       — owns /run/incus/unix.socket (CLI user socket)
-#   incus-admin — owns /var/lib/incus/unix.socket (admin socket, required for
-#                 'incus admin init' and Terraform provider on Incus 6.x zabbly
-#                 to reach project 'default')
+# We need two groups active in the process session:
+#   incus       — owns /run/incus/unix.socket (user CLI socket)
+#   incus-admin — required by Terraform provider (Incus 6.x) to access project
+#                 'default' via the admin socket after initialization
 #
-# id -nG "$USER" reads /etc/group (NSS) and tells us about group DATABASE
-# membership — not whether the group is active in the current process session.
-# We use 'test -r /var/lib/incus/unix.socket' as the ground-truth check:
-# if the admin socket is readable, incus-admin is active in this process.
+# 'sg incus-admin' calls initgroups() which reloads ALL supplementary groups
+# from /etc/group, activating newly added memberships without a logout/login.
 
 _needs_reexec=0
 if ! id -nG "$USER" | tr ' ' '\n' | grep -q '^incus$'; then
@@ -145,35 +142,22 @@ if ! id -nG "$USER" | tr ' ' '\n' | grep -q '^incus$'; then
   sudo usermod -aG incus "$USER"
   _needs_reexec=1
 fi
-if getent group incus-admin &>/dev/null && ! id -nG "$USER" | tr ' ' '\n' | grep -q '^incus-admin$'; then
+if getent group incus-admin &>/dev/null \
+    && ! id -nG "$USER" | tr ' ' '\n' | grep -q '^incus-admin$'; then
   _info "Adding '$USER' to the 'incus-admin' group ..."
   sudo usermod -aG incus-admin "$USER"
   _needs_reexec=1
 fi
 
-# Even when already listed in /etc/group, the current session may not have the
-# group active in process credentials (supplementary groups are frozen at login).
-# Test the admin socket directly — if it's not readable, we need a re-exec.
-if [[ $_needs_reexec -eq 0 ]] \
-    && getent group incus-admin &>/dev/null \
-    && ! test -r /var/lib/incus/unix.socket 2>/dev/null; then
-  _info "Admin socket not accessible in current session — re-executing ..."
-  _needs_reexec=1
-fi
-
 if [[ $_needs_reexec -eq 1 ]]; then
   _info "Re-executing under incus-admin group context ..."
-  # Single sg incus-admin: sets EGID=incus-admin AND calls initgroups() which
-  # loads ALL groups for $USER from /etc/group, including 'incus'.
-  # After this re-exec, both sockets are accessible.
   _script="$(realpath "${BASH_SOURCE[0]}")"
   exec sg incus-admin "bash \"$_script\""
 fi
 _ok "User '$USER' is in the 'incus' and 'incus-admin' groups"
 
-# Export the admin socket for all subsequent Incus operations (CLI + Terraform).
-# On Incus 6.x the user socket isolates each non-root user in project user-<uid>.
-# The admin socket has no project restriction and is needed by Terraform provider.
+# Export admin socket for Terraform provider (used at Step 5).
+# Set here so the path is consistent across all steps.
 export INCUS_SOCKET="/var/lib/incus/unix.socket"
 
 # ── Step 3: Initialize Incus ─────────────────────────────────────────────────
@@ -183,13 +167,24 @@ export INCUS_SOCKET="/var/lib/incus/unix.socket"
 # we need. The check below makes this step idempotent.
 _step "3/8 — Initializing Incus"
 
-if incus storage list --format csv 2>/dev/null | grep -q '^default,'; then
+# 'incus admin init' MUST run via sudo: before initialization the Incus daemon
+# restricts the admin socket (/var/lib/incus/unix.socket) to root-only.
+# After init the daemon opens it to members of the 'incus-admin' group.
+if sudo incus storage list --format csv 2>/dev/null | grep -q '^default,'; then
   _ok "Incus already initialized (default storage pool present)"
 else
   _info "Running 'incus admin init --minimal' ..."
-  incus admin init --minimal
+  sudo incus admin init --minimal
   _ok "Incus initialized"
 fi
+
+# Switch the Incus CLI default project to 'default'.
+# On Incus 6.x each non-root user is placed in project user-<uid> by default.
+# Without this, 'incus exec <vm>' returns "Instance not found" because Terraform
+# creates VMs in 'default' while the CLI looks in 'user-<uid>'.
+# This writes ~/.config/incus/config.yml and is idempotent.
+incus project switch default
+_ok "Incus CLI project set to 'default'"
 
 # ── Step 4: Configure host networking (UFW) ───────────────────────────────────
 # UFW on a fresh Ubuntu machine blocks:
@@ -205,14 +200,8 @@ sudo "$REPO_ROOT/scripts/setup-host.sh"
 # ── Step 5: Provision VMs with Terraform ─────────────────────────────────────
 _step "5/8 — Provisioning VMs with Terraform"
 
-# On Incus 6.x (zabbly), the user socket (/run/incus/unix.socket) places each
-# non-root user in an isolated project (user-<uid>), blocking access to the
-# 'default' project where VMs will be created.  The admin socket
-# (/var/lib/incus/unix.socket) has no such restriction.
-# Both vcossetti (host) and tester (test VM) are members of incus-admin, so
-# the admin socket is accessible in both contexts.
-export INCUS_SOCKET="/var/lib/incus/unix.socket"
-
+# INCUS_SOCKET is already exported from Step 2. The admin socket gives the
+# Terraform lxc/incus provider access to the 'default' project on Incus 6.x.
 _info "Running terraform init ..."
 terraform -chdir="$TERRAFORM_DIR" init -upgrade -input=false
 
