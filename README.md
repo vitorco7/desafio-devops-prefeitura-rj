@@ -272,9 +272,9 @@ Todas as demais dependências (Incus, Terraform, Ansible, kubectl, Helm, k6, ist
 ## 4. Passo a passo de execução do projeto do zero
 
 O projeto pode ser executado do zero de três formas: 
-- A) bootstrap automático via script,
+- A) bootstrap automático via script (recomendado para execução no host local limpo),
 - B) passo a passo manual seguindo os comandos, 
-- C) execução dentro de uma VM Ubuntu virgem criada via Incus aninhado (recomendada para validar reprodutibilidade em ambiente isolado).
+- C) execução dentro de uma VM Ubuntu virgem criada via Incus aninhado (recomendado para execução isolada numa máquina virtual limpa).
 
 ### Opção A — Bootstrap automático (recomendado)
 
@@ -487,9 +487,7 @@ terraform -chdir=infra/terraform destroy -auto-approve -input=false
 
 ### Opção C — Execução em VM virgem via Incus aninhado
 
-> **Pré-requisito**: esta opção requer o Incus já instalado e inicializado no host. Se você está em uma máquina limpa, use a **Opção A** diretamente — ela instala todas as dependências, incluindo o Incus.
-
-Para quem já tem o Incus disponível no host e prefere executar o projeto em um ambiente completamente isolado, os scripts em `scripts/fresh-install-testing/` criam uma VM Ubuntu 24.04 virgem via KVM aninhado, executam o bootstrap dentro dela e permitem destruí-la ao final.
+Os scripts em `scripts/fresh-install-testing/` criam uma VM Ubuntu 24.04 virgem via KVM aninhado e executam o bootstrap dentro dela. O `create-vm.sh` instala e inicializa o Incus automaticamente se necessário — pode ser executado em uma máquina Ubuntu limpa sem nenhuma dependência prévia.
 
 ```bash
 # 1. Criar a VM virgem (4 vCPU, 20 GiB RAM, 30 GiB disco)
