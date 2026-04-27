@@ -703,6 +703,67 @@ k6 → ingressgateway → service-1 → Envoy emite istio_requests_total
                                HPA ajusta réplicas
 ```
 
+### Parâmetros do pipeline: critérios de escolha
+
+Cada parâmetro numérico no pipeline de autoscaling tem uma dependência com o próximo. A cadeia completa é:
+
+```
+scrape_interval (Prometheus)
+  → tamanho efetivo da janela rate()   (PromQL)
+    → tempo de reação do KEDA          (pollingInterval)
+      → tempo mínimo de scale-down     (cooldownPeriod + stabilizationWindowSeconds)
+```
+
+#### `scrape_interval: 15s` no job `envoy-stats`
+
+O intervalo global do Prometheus neste projeto é `60s` (padrão). A função `rate(v[d])` requer **no mínimo 2 amostras** dentro da janela `d` para produzir um resultado não-nulo — com 1 sample por minuto, uma janela `[1m]` conteria apenas 1 amostra (insuficiente) por até 2 minutos após o início do tráfego.
+
+Com `scrape_interval: 15s` aplicado especificamente ao job `envoy-stats`:
+
+| Janela rate() | Amostras disponíveis | Primeiro resultado válido |
+|---|---|---|
+| `[1m]` com scrape 60s | 1 | após ~2 min |
+| `[1m]` com scrape 15s | 4 | após ~30s |
+
+O override de intervalo foi aplicado **apenas ao job `envoy-stats`** — não globalmente — para não aumentar o custo de ingestão dos outros jobs (istiod, kubernetes-pods, etc.) que não alimentam o autoscaling.
+
+#### Janela `rate([1m])`
+
+Uma janela mais curta (`[30s]`) produziria uma métrica mais reativa mas com mais ruído — um burst pontual de 2s inflaria a taxa aparente por toda a janela. Uma janela mais longa (`[5m]`) suavizaria demais e atrasaria o scale-up. `[1m]` é o equilíbrio padrão da documentação do Istio para métricas de taxa de requisição, e com `scrape_interval: 15s` a janela de 1 minuto contém 4 amostras — suficiente para uma estimativa confiável sem suavização excessiva.
+
+#### `pollingInterval: 15s` no ScaledObject
+
+O KEDA consulta o Prometheus a cada `pollingInterval`. Definir este valor abaixo do `scrape_interval` seria inútil — o KEDA leria o mesmo valor repetidamente entre scrapes. Sincronizando ambos em 15s, cada consulta do KEDA lê dados frescos:
+
+```
+t=0s   Prometheus scrape  → KEDA poll  → HPA recalcula
+t=15s  Prometheus scrape  → KEDA poll  → HPA recalcula
+t=30s  Prometheus scrape  → KEDA poll  → HPA recalcula
+```
+
+#### `threshold: 5` req/s por réplica
+
+O threshold define quantas requisições por segundo cada réplica deve absorver antes do HPA adicionar outra. O critério foi:
+
+- Carga do k6: 20 VUs × 2 req/s (sleep 0.5s) = **~40 req/s sustentado**
+- Com threshold=5: `ceil(40/5) = 8` réplicas necessárias → clamped para `maxReplicaCount=5`
+- Resultado desejado: escalar até o máximo durante o teste, demonstrando o limite
+
+Threshold menor (ex: 2) escalaria mais rápido mas atingiria o máximo com menos carga, tornando o demo menos ilustrativo. Threshold maior (ex: 20) não escalaria o suficiente para mostrar múltiplos steps.
+
+#### `cooldownPeriod: 60s` e `stabilizationWindowSeconds: 60s`
+
+Estes dois parâmetros controlam o scale-down, mas atuam em camadas diferentes:
+
+| Parâmetro | Controlado por | Efeito |
+|---|---|---|
+| `cooldownPeriod: 60` | KEDA | Mínimo de 60s após a métrica cair abaixo do threshold antes de KEDA sinalizar "scale down" ao HPA |
+| `stabilizationWindowSeconds: 60` | HPA (via `advanced.horizontalPodAutoscalerConfig`) | HPA espera que a métrica permaneça abaixo do threshold por 60s antes de executar o scale-down |
+
+Sem o override de `stabilizationWindowSeconds`, o HPA usaria seu padrão de **300s** — o scale-down após o k6 terminar levaria 5 minutos, tornando a demonstração tediosa. Com 60s em ambos, o scale-down acontece em ~2 minutos após o fim da carga, que é observável numa demo ao vivo.
+
+Os dois parâmetros são redundantes em parte, mas complementares: `cooldownPeriod` é uma proteção do KEDA contra oscilações rápidas da métrica; `stabilizationWindowSeconds` é a proteção do HPA contra flapping no nível do Kubernetes.
+
 ### Métrica escolhida
 
 ```promql
