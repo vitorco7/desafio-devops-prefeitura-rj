@@ -29,9 +29,14 @@ echo "============================================================"
 echo ""
 
 # -- Step 1: Install git -------------------------------------------------------
-echo "[1/3] Installing git..."
-sudo apt-get install -y --no-install-recommends git -qq
-echo "      git $(git --version)"
+# git may already be installed by create-vm.sh, but we ensure it here so this
+# script is self-contained and works even if create-vm.sh was interrupted.
+echo "[1/3] Ensuring git is installed..."
+if ! command -v git &>/dev/null; then
+  sudo apt-get update -qq
+  sudo apt-get install -y --no-install-recommends git
+fi
+echo "      $(git --version)"
 
 # -- Step 2: Clone repo from GitHub --------------------------------------------
 echo "[2/3] Cloning repo from GitHub..."

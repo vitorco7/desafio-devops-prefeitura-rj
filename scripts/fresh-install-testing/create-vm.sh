@@ -38,7 +38,6 @@ incus launch "$VM_IMAGE" "$VM_NAME" \
   --vm \
   --config limits.cpu="$VM_CPU" \
   --config limits.memory="$VM_RAM" \
-  --config security.nesting=true \
   --device root,size="$VM_DISK"
 
 # -- Wait for cloud-init -------------------------------------------------------
@@ -51,6 +50,11 @@ for i in $(seq 1 60); do
   sleep 5
 done
 echo
+
+# -- Install git --------------------------------------------------------------
+echo "Installing git..."
+incus exec "$VM_NAME" -- apt-get update -qq
+incus exec "$VM_NAME" -- apt-get install -y --no-install-recommends git
 
 # -- Create non-root user with passwordless sudo -------------------------------
 echo "Creating user '$TEST_USER' with passwordless sudo..."
@@ -71,6 +75,6 @@ echo "[OK] VM '$VM_NAME' is ready."
 echo ""
 echo "Next steps:"
 echo "  1. Shell into the VM:"
-echo "       incus exec $VM_NAME -- su -l $TEST_USER"
+echo "       incus exec fresh-ubuntu -- su -l tester"
 echo "  2. Inside the VM, run the test:"
 echo "       bash run-test.sh"

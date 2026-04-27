@@ -88,23 +88,35 @@ fi
 
 echo "[3/4] Ensuring UFW rules for DHCP, DNS, and forwarding on ${BRIDGE} ..."
 
-# DHCP: VMs request IP addresses via UDP broadcast to port 67 on the bridge.
-# Without this, dnsmasq never hears the DHCPDISCOVER and VMs get no IP.
-ufw allow in on "${BRIDGE}" to any port 67 proto udp \
-  comment "Incus ${BRIDGE} DHCP" > /dev/null
+_ufw_bridge_rules() {
+  local br="$1"
+  # DHCP: VMs request IP addresses via UDP broadcast to port 67 on the bridge.
+  # Without this, dnsmasq never hears the DHCPDISCOVER and VMs get no IP.
+  ufw allow in on "${br}" to any port 67 proto udp \
+    comment "Incus ${br} DHCP" > /dev/null
 
-# DNS: VMs forward DNS queries to dnsmasq at the bridge gateway (10.220.31.1).
-# Without this, systemd-resolved inside the VM hangs on every hostname lookup.
-ufw allow in on "${BRIDGE}" to any port 53 \
-  comment "Incus ${BRIDGE} DNS" > /dev/null
+  # DNS: VMs forward DNS queries to dnsmasq at the bridge gateway.
+  # Without this, systemd-resolved inside the VM hangs on every hostname lookup.
+  ufw allow in on "${br}" to any port 53 \
+    comment "Incus ${br} DNS" > /dev/null
 
-# General forwarding: allow all traffic in/out of the bridge to be forwarded
-# to/from the outbound interface. This covers VM-to-internet and inter-VM
-# traffic that passes through the host's forwarding chain.
-ufw allow in on "${BRIDGE}" \
-  comment "Incus ${BRIDGE} forward in" > /dev/null
-ufw allow out on "${BRIDGE}" \
-  comment "Incus ${BRIDGE} forward out" > /dev/null
+  # General forwarding: allow all traffic in/out of the bridge.
+  ufw allow in on "${br}" \
+    comment "Incus ${br} forward in" > /dev/null
+  ufw allow out on "${br}" \
+    comment "Incus ${br} forward out" > /dev/null
+}
+
+# Apply rules to the k3s bridge (cluster VMs)
+_ufw_bridge_rules "${BRIDGE}"
+
+# Apply the same rules to the default Incus bridge (incusbr0).
+# This is used by non-k3s VMs such as the fresh-install test VM.
+# Without these rules, VMs on incusbr0 cannot get an IP via DHCP
+# or reach the internet, even though DEFAULT_FORWARD_POLICY=ACCEPT.
+if ip link show incusbr0 &>/dev/null; then
+  _ufw_bridge_rules "incusbr0"
+fi
 
 # ── Step 5: Reload UFW ───────────────────────────────────────────────────────
 echo "[4/4] Reloading UFW ..."
