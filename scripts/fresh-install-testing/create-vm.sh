@@ -62,7 +62,18 @@ incus exec "$VM_NAME" -- bash -c "
   useradd -m -s /bin/bash '$TEST_USER'
   echo '${TEST_USER} ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/${TEST_USER}
   chmod 440 /etc/sudoers.d/${TEST_USER}
+  # Add to incus and incus-admin groups so 'incus admin init' works without sudo.
+  # On Incus 6.x (zabbly), incus-admin owns /var/lib/incus/unix.socket (admin socket).
+  # The bootstrap.sh only checks for 'incus' group, but a fresh useradd has neither.
+  usermod -aG incus,incus-admin '${TEST_USER}'
 "
+
+# Incus 6.x assigns each non-root user their own project (user-<uid>) by default.
+# Terraform provisions VMs in the 'default' project (admin context).
+# Without this, 'incus exec k3s-server-1' as tester fails with "Instance not found"
+# because it looks in 'user-1001' instead of 'default'.
+echo "Configuring Incus default project for '$TEST_USER'..."
+incus exec "$VM_NAME" -- su -l "$TEST_USER" -c "incus project switch default"
 
 # -- Inject run-test.sh into the VM -------------------------------------------
 echo "Copying run-test.sh into VM at /home/${TEST_USER}/run-test.sh..."

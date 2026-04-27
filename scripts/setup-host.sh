@@ -29,6 +29,16 @@ BRIDGE_CIDR="10.220.31.0/24"
 UFW_BEFORE_RULES="/etc/ufw/before.rules"
 UFW_DEFAULT="/etc/default/ufw"
 
+# ── Ensure UFW is installed ───────────────────────────────────────────────────
+if ! command -v ufw &>/dev/null; then
+  echo "UFW not found — installing..."
+  apt-get update -qq
+  apt-get install -y ufw
+  # Enable UFW non-interactively without blocking existing connections
+  ufw --force enable
+  echo "UFW installed and enabled."
+fi
+
 # ── Step 1: Detect default outbound interface ─────────────────────────────────
 # `ip route get 8.8.8.8` prints the route used to reach the internet.
 # We extract the interface name from that output — works on any Linux host
