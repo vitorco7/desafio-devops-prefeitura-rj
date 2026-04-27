@@ -234,6 +234,12 @@
       register: k3s_kubeconfig_raw
       changed_when: false
 
+    - name: Ensure ~/.kube directory exists
+      ansible.builtin.file:
+        path: "{{ lookup('env', 'HOME') }}/.kube"
+        state: directory
+        mode: '0700'
+
     - name: Write kubeconfig to ~/.kube/config with correct server address
       ansible.builtin.copy:
         content: "{{ k3s_kubeconfig_raw.stdout | replace('https://127.0.0.1:6443', 'https://' + k3s_server_ipv4 + ':6443') }}"
