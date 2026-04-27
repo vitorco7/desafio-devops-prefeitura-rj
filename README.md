@@ -1,6 +1,6 @@
-# Desafio Técnico — Engenharia DevOps
+# Desafio Técnico — Pessoa Engenheira DevOps
 
-Cluster k3s multi-nó com Istio service mesh, autenticação JWT, mTLS obrigatório entre todos os serviços e autoscaling orientado a métricas com KEDA + Prometheus.
+Cluster k3s multi-nó com Istio service mesh, autenticação JWT, mTLS entre serviços e autoscaling orientado a métricas com KEDA + Prometheus.
 
 ---
 
@@ -25,14 +25,14 @@ As quatro opções disponíveis foram avaliadas:
 
 | Ferramenta | Eliminado por |
 |---|---|
-| Vagrant + VirtualBox | O provider `terra-farm/virtualbox` (community, v0.2.1 pré-produção) é posicionado pelo próprio autor como ferramenta de aprendizado ("familiar with Terraform without leaving your machine"); usa Vagrant boxes como formato de imagem; fornece apenas `virtualbox_vm` (sem recursos de rede ou perfil); hipervisor tipo 2 com overhead maior |
-| Vagrant + libvirt | O Vagrant adiciona uma camada de abstração redundante quando Terraform já faz IaC nativa; dependências extras de libvirt |
-| Multipass | Sem provider Terraform nativo; automação limitada para provisionamento de múltiplos nós |
+| Vagrant + VirtualBox | O VirtualBox não possui provider nativo para Terraform, apenas uma versão community (`terra-farm/virtualbox`), que fornece apenas o `virtualbox_vm` (sem recursos de rede ou perfil). Por tratar-se de um  hipervisor tipo 2, o VirtualBox também apresenta um overhead maior. Quanto ao Vagrant, ele torna-se redundante visto que será utilizado Terraform no projeto. |
+| Vagrant + libvirt | Como afirmado acima, será utilizado Terraform para IaC nativa; tornando o Vagrant dispensável. Quanto ao `libvirt`, a necessidade de inclusão de dependências extras no projeto torna a solução menos prática. |
+| Multipass | Sem provider Terraform nativo e  automação limitada para provisionamento de múltiplos nós |
 | **Incus** | **Escolhido** |
 
 O Incus foi escolhido pelos seguintes motivos:
 
-**Provider Terraform nativo**: `lxc/incus` v1.0.2 permite declarar VMs, redes e perfis inteiramente em HCL — o ciclo `terraform apply` / `terraform destroy` é completamente reproduzível sem intervenção manual.
+**Provider Terraform nativo**: `lxc/incus` v1.0.2 permite declarar VMs, redes e perfis inteiramente em HCL (HashiCorp Configuration Language) — o ciclo `terraform apply` / `terraform destroy` é completamente reproduzível sem intervenção manual.
 
 **VM (KVM) em vez de container (LXC)**: O Istio requer manipulação de `iptables` via `NET_ADMIN` e um init container privilegiado (`istio-init`) que reconfigura as regras de rede antes de cada pod subir. Em containers LXC o kernel é compartilhado com o host — qualquer regra `iptables` injetada pelo Istio afeta a máquina host inteira. Com VMs KVM cada nó tem seu próprio kernel isolado; o `iptables` manipulado pelo Istio fica contido dentro da VM sem impacto externo.
 
@@ -51,6 +51,8 @@ O Incus foi escolhido pelos seguintes motivos:
 | `k3s-agent-2` | worker | `10.220.31.x` | 2 | 4 GiB |
 
 Todos na bridge `k3sbr0` (subnet `10.220.31.0/24`, NAT habilitado via UFW).
+
+A alocação de 2 vCPU e 4 GiB de RAM por VM segue as recomendações oficiais do Istio para ambientes de laboratório, que indicam pelo menos 1 vCPU e 1.5–2 GiB de RAM por pod com sidecar. Como cada node hospeda múltiplos pods (aplicação + sidecar), o cálculo considera 2 pods principais por node, totalizando cerca de 4 GiB de RAM (2 × 2 GiB) e 2 vCPU para evitar contenção e garantir estabilidade do k3s, sidecars, autenticação JWT, mTLS e autoscaling.
 
 ### Namespaces e serviços
 
