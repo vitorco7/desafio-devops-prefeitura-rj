@@ -67,35 +67,37 @@ keda               — KEDA operator (bônus)
 
 ### Diagrama de fluxo de tráfego
 
-```
-                        ┌──────────────────────────────────────────────────────┐
-                        │                  Istio Mesh                          │
-  external              │                                                      │
-  client  ──JWT──►  [istio-ingressgateway]                                     │
-  (curl)            LoadBalancer IPs          Host: service-1.local            │
-                    10.220.31.x (×3)   ──────────────────────────►  [service-1]│
-                                                                    namespace  │
-                                                                    service-1  │
-                                                                        │      │
-                                                                     mTLS      │
-                                                                  (SA identity)│
-                                                                        │      │
-                                                                        ▼      │
-                                                                   [service-2] │
-                                                                   namespace   │
-                                                                   service-2   │
-                                                                   ClusterIP   │
-                                                                   (bloqueado) │
-                        │                                                      │
-  external              │  Host: service-3.local                               │
-  client  ──JWT──►  [istio-ingressgateway] ──────────────────────► [service-3] │
-  (curl)                │                                          namespace   │
-                        │                                          service-3   │
-                        │                                          (isolado)   │
-                        └──────────────────────────────────────────────────────┘
+```mermaid
+flowchart LR
+    client1("external client<br/>(curl)")
+    client2("external client<br/>(curl)")
 
-  s1 -.bloqueado.-> s3    (AuthorizationPolicy: ALLOW apenas ingressgateway SA)
-  s2 -.bloqueado.-> s3    (mesmo motivo)
+    subgraph mesh["Istio Mesh, k3sbr0, 10.220.31.0/24"]
+        gw["istio-ingressgateway<br/>pod: processo Envoy<br/>svc: LoadBalancer, 10.220.31.x"]
+
+        subgraph ns1["namespace: service-1, sidecar injection: on"]
+            s1["service-1, httpbin, YAML<br/>SA: service-1<br/>PeerAuth: STRICT"]
+        end
+
+        subgraph ns2["namespace: service-2, sidecar injection: on"]
+            s2["service-2, httpbin, Helm<br/>SA: service-2, ClusterIP<br/>PeerAuth: STRICT"]
+        end
+
+        subgraph ns3["namespace: service-3, sidecar injection: on"]
+            s3["service-3, httpbin, Helm<br/>SA: service-3<br/>PeerAuth: STRICT"]
+        end
+    end
+
+    client1 -->|"JWT RS256, Host: service-1.local"| gw
+    client2 -->|"JWT RS256, Host: service-3.local"| gw
+
+    gw -->|"mTLS + SPIFFE: ingressgateway-SA + JWT valido"| s1
+    gw -->|"mTLS + SPIFFE: ingressgateway-SA + JWT valido"| s3
+
+    s1 -->|"mTLS cross-ns + SPIFFE: service-1-SA, sem JWT"| s2
+
+    s1 -. "DENY: source.principal != ingressgateway-SA" .-> s3
+    s2 -. "DENY: source.principal != ingressgateway-SA" .-> s3
 ```
 
 ## Estrutura do repositório
