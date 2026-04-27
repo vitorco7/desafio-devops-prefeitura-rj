@@ -187,7 +187,7 @@ O script executa as seguintes etapas em ordem, com checagens de idempotência em
 | Etapa | O que faz |
 |---|---|
 | 0 | Valida OS Ubuntu e execução não-root |
-| 1 | Instala Incus, Terraform, Ansible, kubectl |
+| 1 | Instala Incus, Terraform, Ansible, kubectl, Helm, k6 |
 | 2 | Garante membership no grupo `incus` (re-executa se necessário) |
 | 3 | Inicializa Incus (`incus admin init --minimal`) |
 | 4 | Configura UFW para bridge `k3sbr0` (DHCP, DNS, NAT) via `setup-host.sh` |
@@ -801,6 +801,7 @@ kubectl get pods -n service-1 -w
 kubectl get hpa -n service-1 -w
 
 # Terminal C — executar k6
+cd ~/desafio-devops-prefeitura-rj   # necessário para paths relativos (infra/jwt/, scripts/)
 GW_IP=$(kubectl get svc istio-ingressgateway -n istio-system \
   -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
 TOKEN=$(cat infra/jwt/token.jwt)

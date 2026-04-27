@@ -127,6 +127,22 @@ else
   _ok "helm installed"
 fi
 
+# ── k6 (from Grafana apt repository) ─────────────────────────────────────────
+# k6 is the load testing tool used to demonstrate KEDA autoscaling (bonus).
+if command -v k6 &>/dev/null; then
+  _ok "k6 already installed — $(k6 version 2>/dev/null | head -1 || echo 'unknown version')"
+else
+  _info "Installing k6 ..."
+  curl -fsSL https://dl.k6.io/key.gpg \
+    | sudo gpg --dearmor -o /etc/apt/keyrings/k6-archive-keyring.gpg
+  echo "deb [signed-by=/etc/apt/keyrings/k6-archive-keyring.gpg] \
+https://dl.k6.io/deb stable main" \
+    | sudo tee /etc/apt/sources.list.d/k6.list >/dev/null
+  sudo apt-get update -qq
+  sudo apt-get install -y k6
+  _ok "k6 installed"
+fi
+
 # ── Step 2: Incus group membership ───────────────────────────────────────────
 # The Incus socket (/run/incus/unix.socket) is owned by group 'incus'.
 # Without group membership, 'incus' and 'terraform apply' (via the Incus
