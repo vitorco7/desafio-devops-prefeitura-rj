@@ -35,6 +35,28 @@ _info()  { echo "       $*"; }
 _ok()    { echo "  [OK] $*"; }
 _fatal() { echo "[FAIL] $*" >&2; exit 1; }
 
+# ── --destroy flag ────────────────────────────────────────────────────────────
+# Usage: bash bootstrap.sh --destroy
+# Tears down all Terraform-managed resources (VMs, network, profile).
+# Does NOT uninstall host tools (Incus, Terraform, kubectl, etc.).
+if [[ "${1:-}" == "--destroy" ]]; then
+  [[ $EUID -ne 0 ]] || _fatal "Do not run as root."
+  export INCUS_SOCKET="/var/lib/incus/unix.socket"
+
+  echo
+  echo "  This will run 'terraform destroy' and delete all cluster VMs."
+  echo "  Host tools (Incus, kubectl, Helm, etc.) are NOT removed."
+  echo
+  read -rp "  Destroy the cluster? [y/N] " _confirm
+  [[ "$_confirm" =~ ^[Yy]$ ]] || { echo "  Aborted."; exit 0; }
+
+  echo
+  _info "Running terraform destroy ..."
+  terraform -chdir="$TERRAFORM_DIR" destroy -auto-approve -input=false
+  _ok "Cluster destroyed. Run 'bash bootstrap.sh' to provision again."
+  exit 0
+fi
+
 # ── Step 0: Validate environment ─────────────────────────────────────────────
 _step "0/8 — Validating environment"
 

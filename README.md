@@ -269,7 +269,12 @@ Todas as demais dependências (Incus, Terraform, Ansible, kubectl, Helm, k6, ist
 
 ---
 
-## 4. Passo a passo de execução do projeto
+## 4. Passo a passo de execução do projeto do zero
+
+O projeto pode ser executado do zero de três formas: 
+- A) bootstrap automático via script,
+- B) passo a passo manual seguindo os comandos, 
+- C) execução dentro de uma VM Ubuntu virgem criada via Incus aninhado (recomendada para validar reprodutibilidade em ambiente isolado).
 
 ### Opção A — Bootstrap automático (recomendado)
 
@@ -299,6 +304,12 @@ O script executa as seguintes etapas em ordem, com checagens de idempotência em
 | 13 | Aplica ScaledObject para service-1 |
 
 Tempo esperado em primeira execução: 15–25 minutos (dominado pelo download das imagens Ubuntu e do k3s).
+
+Para destruir o cluster (VMs e rede) sem remover as ferramentas do host:
+
+```bash
+bash scripts/bootstrap.sh --destroy
+```
 
 ### Opção B — Passo a passo manual 
 
@@ -467,6 +478,13 @@ kubectl rollout status deployment/keda-operator-metrics-apiserver -n keda --time
 kubectl apply -f infra/k8s/keda/service-1-scaledobject.yaml
 ```
 
+Para destruir o cluster ao final:
+
+```bash
+export INCUS_SOCKET="/var/lib/incus/unix.socket"
+terraform -chdir=infra/terraform destroy -auto-approve -input=false
+```
+
 ### Opção C — Execução em VM virgem via Incus aninhado
 
 > **Pré-requisito**: esta opção requer o Incus já instalado e inicializado no host. Se você está em uma máquina limpa, use a **Opção A** diretamente — ela instala todas as dependências, incluindo o Incus.
@@ -573,7 +591,7 @@ Saída esperada:
 
 ## 6. Comandos de validação
 
-### Setup inicial (executar uma vez)
+### Setup inicial (necessário executar uma vez antes dos próximos passos)
 
 ```bash
 # IP do ingressgateway (muda a cada provisionamento)
