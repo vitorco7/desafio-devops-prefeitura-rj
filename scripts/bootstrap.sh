@@ -131,9 +131,24 @@ _step "2/8 — Incus group membership"
 if id -nG "$USER" | tr ' ' '\n' | grep -q '^incus$'; then
   _ok "User '$USER' is already in the 'incus' group"
 else
-  _info "Adding '$USER' to the 'incus' group and re-executing ..."
+  # Also add to incus-admin: required on Incus 6.x (zabbly) for 'incus admin init'
+  # because the admin socket (/var/lib/incus/unix.socket) is owned by incus-admin.
+  _info "Adding '$USER' to the 'incus' and 'incus-admin' groups and re-executing ..."
   sudo usermod -aG incus "$USER"
+  getent group incus-admin &>/dev/null && sudo usermod -aG incus-admin "$USER"
   exec sg incus "$(realpath "${BASH_SOURCE[0]}")"
+fi
+
+# Incus 6.x assigns each non-root user their own project (user-<uid>) by default.
+# Terraform provisions VMs in the 'default' project, so we must switch here.
+# This is idempotent — switching to the already-active project is a no-op.
+if incus project list --format csv 2>/dev/null | grep -q '^default,'; then
+  current_project=$(incus project list --format csv 2>/dev/null | grep '(current)' | cut -d, -f1)
+  if [ "${current_project}" != "default" ]; then
+    _info "Switching Incus project to 'default' ..."
+    incus project switch default
+  fi
+  _ok "Incus project: default"
 fi
 
 # ── Step 3: Initialize Incus ─────────────────────────────────────────────────
