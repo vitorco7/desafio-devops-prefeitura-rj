@@ -505,7 +505,7 @@ bash scripts/fresh-install-testing/teardown-vm.sh
 
 O `deploy-cluster.sh` clona o repositório do GitHub e executa `bootstrap.sh` exatamente como na Opção A. O comportamento esperado é idêntico ao de uma máquina Ubuntu 24.04 limpa.
 
-> **Nota**: durante o bootstrap, o script executa `exec sg incus-admin "bash $script"` para ativar o grupo `incus-admin` sem necessidade de logout. Isso reinicia o processo do script a partir do início — as etapas já concluídas são puladas pelas checagens de idempotência. É comportamento esperado.
+> **Nota**: durante o bootstrap, o script executa `exec sg incus-admin "bash $script"` para ativar o grupo `incus-admin` sem necessidade de logout. Isso reinicia o processo do script a partir do início — as etapas já concluídas são puladas pelas checagens de idempotência.
 
 ---
 
