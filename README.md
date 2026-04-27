@@ -65,31 +65,41 @@ monitoring         — Prometheus (bônus)
 keda               — KEDA operator (bônus)
 ```
 
-### Diagrama de fluxo de tráfego
+### Topologia
 
 ```mermaid
 flowchart LR
     client1("external client<br/>(curl)")
     client2("external client<br/>(curl)")
+    k6("k6<br/>load test")
 
     subgraph mesh["Istio Mesh, k3sbr0, 10.220.31.0/24"]
         gw["istio-ingressgateway<br/>pod: processo Envoy<br/>svc: LoadBalancer, 10.220.31.x"]
 
-        subgraph ns1["namespace: service-1, sidecar injection: on"]
+        subgraph ns1["namespace: service-1"]
             s1["service-1, httpbin, YAML<br/>SA: service-1<br/>PeerAuth: STRICT"]
         end
 
-        subgraph ns2["namespace: service-2, sidecar injection: on"]
+        subgraph ns2["namespace: service-2"]
             s2["service-2, httpbin, Helm<br/>SA: service-2, ClusterIP<br/>PeerAuth: STRICT"]
         end
 
-        subgraph ns3["namespace: service-3, sidecar injection: on"]
+        subgraph ns3["namespace: service-3"]
             s3["service-3, httpbin, Helm<br/>SA: service-3<br/>PeerAuth: STRICT"]
         end
     end
 
+    subgraph nsmon["namespace: monitoring"]
+        prom["Prometheus<br/>Helm, v29.2.1<br/>scrape: envoy-stats, 15s"]
+    end
+
+    subgraph nskeda["namespace: keda"]
+        keda["KEDA operator<br/>Helm, v2.19.0<br/>ScaledObject: service-1<br/>pollingInterval: 15s, threshold: 5 req/s"]
+    end
+
     client1 -->|"JWT RS256, Host: service-1.local"| gw
     client2 -->|"JWT RS256, Host: service-3.local"| gw
+    k6 -->|"JWT RS256, Host: service-1.local, 20 VUs"| gw
 
     gw -->|"mTLS + SPIFFE: ingressgateway-SA + JWT valido"| s1
     gw -->|"mTLS + SPIFFE: ingressgateway-SA + JWT valido"| s3
@@ -98,6 +108,10 @@ flowchart LR
 
     s1 -. "DENY: source.principal != ingressgateway-SA" .-> s3
     s2 -. "DENY: source.principal != ingressgateway-SA" .-> s3
+
+    prom -->|"scrape istio_requests_total<br/>via anotacao prometheus.io/path"| s1
+    keda -->|"PromQL query, 15s"| prom
+    keda -->|"HPA: min 1, max 5 replicas"| s1
 ```
 
 ## Estrutura do repositório
